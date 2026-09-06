@@ -35,6 +35,9 @@ public class TouchpadViewV3 extends View implements View.OnCapturedPointerListen
     private static final int MAX_LONG_PRESS_MILLISECONDS = 250;
     private static final int MIN_MOVE_THRESHOLD = 4;
     private static final int MAX_SCROLL_ACCUM = 100;
+    // 特性总开关：暂时关闭“单指长按→右键”。双指已承担右键/右键拖拽，长按右键与之冲突，先停用；
+    // 需要恢复时改回 true（不影响 Profile/UI 的 longPressRightClick 链路）。
+    private static final boolean LONG_PRESS_RIGHT_CLICK_ENABLED = false;
 
     private final Finger[] fingers = new Finger[MAX_FINGERS];
     private byte numFingers = 0;
@@ -95,6 +98,7 @@ public class TouchpadViewV3 extends View implements View.OnCapturedPointerListen
     // V3: 按下时立即触发按键，抬起时释放
     private boolean leftPressedOnDown = false;  // 标记左键是否在按下时已触发
     private boolean rightPressedOnDown = false; // 标记右键是否在按下时已触发（双指）
+    private boolean twoFingersRightGesture = false; // 本次手势是否触发过双指右键，用于抬起时抑制单指 tap 补发点击
 
     public TouchpadViewV3(Context context, XServer xServer, boolean capturePointerOnExternalMouse) {
         super(context);
@@ -318,6 +322,7 @@ public class TouchpadViewV3 extends View implements View.OnCapturedPointerListen
                 fingerPointerButtonRight = null;
                 leftPressedOnDown = false;
                 rightPressedOnDown = false;
+                twoFingersRightGesture = false;
                 break;
         }
         return true;
@@ -339,11 +344,14 @@ public class TouchpadViewV3 extends View implements View.OnCapturedPointerListen
                 break;
             case 2:
                 Finger finger2 = findSecondFinger(finger1);
-                // V3: 双指按下时立即触发右键（或左键，取决于swap），但缩放模式下不触发
-                if (finger2 != null && !moveCursorToTouchpoint && twoFingersRightClick && !pinchZoomEnabled) {
+                // 双指按下：先把指针跳到本指触点，再立即触发右键（或左键，取决于swap），缩放模式下不触发
+                // 注意：moveCursorToTouchpoint（点击定位）模式下同样生效，以支持双指右键绝对拖拽
+                if (finger2 != null && twoFingersRightClick && !pinchZoomEnabled) {
+                    xServer.injectPointerMove(finger1.x, finger1.y);
                     if (swapMouseButtons) pressPointerButtonLeft(finger1);
                     else pressPointerButtonRight(finger1);
                     rightPressedOnDown = true;
+                    twoFingersRightGesture = true;
                 }
                 break;
         }
@@ -385,10 +393,13 @@ public class TouchpadViewV3 extends View implements View.OnCapturedPointerListen
     private void handleFingerUp(Finger finger1) {
         switch (numFingers) {
             case 1:
+                final boolean fromTwoFingers = twoFingersRightGesture;
+                twoFingersRightGesture = false;
                 if (moveCursorToTouchpoint) {
                     float f1x = unzoom(finger1.x, pinchCenterX);
                     float f1y = unzoom(finger1.y, pinchCenterY);
-                    if (finger1.isTap()) {
+                    // 双指右键手势已处理点击，最后一指抬起不再补发单指 tap 点击
+                    if (!fromTwoFingers && finger1.isTap()) {
                         if (Math.hypot(f1x - xServer.pointer.getX(), f1y - xServer.pointer.getY()) >= MAX_TAP_TRAVEL_DISTANCE) {
                             xServer.injectPointerMove((int) f1x, (int) f1y);
                         }
@@ -402,7 +413,7 @@ public class TouchpadViewV3 extends View implements View.OnCapturedPointerListen
                             }
                         }, MOVE_TO_CLICK_DELAY_MS);
                     }
-                    if (finger1.isLongPress() && longPressRightClick) {
+                    if (LONG_PRESS_RIGHT_CLICK_ENABLED && !fromTwoFingers && finger1.isLongPress() && longPressRightClick) {
                         if (Math.hypot(f1x - xServer.pointer.getX(), f1y - xServer.pointer.getY()) >= MAX_TAP_TRAVEL_DISTANCE) {
                             xServer.injectPointerMove((int) f1x, (int) f1y);
                         }
@@ -442,11 +453,14 @@ public class TouchpadViewV3 extends View implements View.OnCapturedPointerListen
                 }
                 break;
             case 2:
-                Finger finger2 = findSecondFinger(finger1);
-                // V3: 双指按键已在按下时触发，这里只做释放
+                // 双指按键已在按下时触发，这里按“实际按下者”释放：
+                // releasePointerButton* 要求 f == fingerPointerButtonX 才生效，
+                // 若先抬起的正是触发按键的那根手指，用抬起指去释放会落空，导致按键卡死。
                 if (rightPressedOnDown) {
-                    if (swapMouseButtons && !moveCursorToTouchpoint) releasePointerButtonLeft(finger1);
-                    else releasePointerButtonRight(finger1);
+                    if (swapMouseButtons) {
+                        if (fingerPointerButtonLeft != null) releasePointerButtonLeft(fingerPointerButtonLeft);
+                    }
+                    else if (fingerPointerButtonRight != null) releasePointerButtonRight(fingerPointerButtonRight);
                     rightPressedOnDown = false;
                 }
                 break;
@@ -495,7 +509,8 @@ public class TouchpadViewV3 extends View implements View.OnCapturedPointerListen
         }
         if (finger2 != null) {
             float currDist = (float) Math.hypot(finger1.x - finger2.x, finger1.y - finger2.y) * resolutionScale;
-            if (twoFingersScroll && currDist < MAX_TWO_FINGERS_SCROLL_DISTANCE) {
+            boolean rightHeld = xServer.pointer.isButtonPressed(Pointer.Button.BUTTON_RIGHT);
+            if (!rightHeld && twoFingersScroll && currDist < MAX_TWO_FINGERS_SCROLL_DISTANCE) {
                 scrollAccumY += ((finger1.y + finger2.y) * 0.5f) - ((finger1.lastY + finger2.lastY) * 0.5f);
                 if (scrollAccumY < -MAX_SCROLL_ACCUM) {
                     xServer.injectPointerButtonPress(Pointer.Button.BUTTON_SCROLL_DOWN);
@@ -507,14 +522,14 @@ public class TouchpadViewV3 extends View implements View.OnCapturedPointerListen
                     scrollAccumY = 0;
                 }
                 scrolling = true;
-            } else if (!moveCursorToTouchpoint && twoFingersDrag && currDist >= MAX_TWO_FINGERS_SCROLL_DISTANCE &&
-                       !xServer.pointer.isButtonPressed(Pointer.Button.BUTTON_LEFT) &&
-                       finger2.travelDistance() < MAX_TAP_TRAVEL_DISTANCE) {
-                pressPointerButtonLeft(finger1);
+            } else if (twoFingersDrag && rightHeld && finger2.travelDistance() >= MAX_TAP_TRAVEL_DISTANCE) {
+                // 双指右键拖拽：受 twoFingersDrag 开关控制；按住右键时指针绝对跟随另一指，
+                // 任意两指间距均生效；手指基本不动则不移动，保持纯双指右键点击
+                xServer.injectPointerMove(finger2.x, finger2.y);
                 skipPointerMove = true;
             }
         }
-        if (!scrolling && numFingers <= 2 && !skipPointerMove) {
+        if (!scrolling && numFingers == 1 && !skipPointerMove) {
             if (moveCursorToTouchpoint) {
                 long duration = System.currentTimeMillis() - finger1.touchTime;
                 if (shortDragEnabled && duration < SHORT_DRAG_MAX_TIME && finger1.travelDistance() > MAX_TAP_TRAVEL_DISTANCE) {
@@ -526,7 +541,9 @@ public class TouchpadViewV3 extends View implements View.OnCapturedPointerListen
                     int f1x = (int) unzoom(finger1.x, pinchCenterX);
                     int f1y = (int) unzoom(finger1.y, pinchCenterY);
                     xServer.injectPointerMove(f1x, f1y);
-                    if (finger1.travelDistance() > MAX_TAP_TRAVEL_DISTANCE && !isLongDrag) {
+                    // 双指右键手势未结束（twoFingersRightGesture 在最后一指抬起才清零）时，
+                    // 剩余单指继续移动不再自动按左键，避免“右键拖完变左键拖”
+                    if (!twoFingersRightGesture && finger1.travelDistance() > MAX_TAP_TRAVEL_DISTANCE && !isLongDrag) {
                         isLongDrag = true;
                         if (swapMouseButtons) pressPointerButtonRight(finger1);
                         else pressPointerButtonLeft(finger1);
@@ -574,6 +591,7 @@ public class TouchpadViewV3 extends View implements View.OnCapturedPointerListen
                 isLongDrag = false;
                 leftPressedOnDown = false;
                 rightPressedOnDown = false;
+                twoFingersRightGesture = false;
                 break;
         }
     }
