@@ -112,9 +112,19 @@ void GLFramebuffer_setAttachment(GLenum target, GLenum attachment, GLenum object
 }
 
 void GLFramebuffer_delete(GLuint id) {
+    // 槽位清理：slot1/slot2（DRAW/READ）对应真实绑定点，被删对象占有时按 GL 语义
+    // 回退默认帧缓冲——bind(槽, 0) 的 0→displayBuffer 映射正好表达这一语义。
+    // slot0（GL_FRAMEBUFFER）不是真实绑定点，只是"客户端最后一次合并绑定"的缓存
+    // 记录：命中时绝不能调 bind(GL_FRAMEBUFFER, 0)——其 ARRAYS_FILL 会把 slot1/slot2
+    // 的客户端记录一并覆盖成 displayBuffer（客户端状态缓存不知情、不再重发，之后
+    // blit 源/目标错乱），只改写记录即可。
+    static const GLenum targetsBySlot[MAX_FRAMEBUFFER_TARGETS] = {
+        GL_FRAMEBUFFER, GL_DRAW_FRAMEBUFFER, GL_READ_FRAMEBUFFER
+    };
     for (int i = 0; i < MAX_FRAMEBUFFER_TARGETS; i++) {
         if (id == currentRenderer->clientState.framebuffer[i]) {
-            GLFramebuffer_bind(GL_FRAMEBUFFER, 0);
+            if (i == 0) currentRenderer->clientState.framebuffer[0] = currentRenderer->displayBuffer;
+            else GLFramebuffer_bind(targetsBySlot[i], 0);
         }
     }
 

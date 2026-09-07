@@ -100,7 +100,6 @@ typedef struct JMethods {
     JNIEnv* env;
     jobject obj;
     jmethodID getWindowSize;
-    jmethodID clearWindowContent;
     jmethodID updateWindowContent;
     jmethodID getGLXContextPtr;
 } JMethods;
