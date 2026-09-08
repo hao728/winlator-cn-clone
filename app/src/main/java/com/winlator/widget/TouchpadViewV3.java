@@ -522,11 +522,15 @@ public class TouchpadViewV3 extends View implements View.OnCapturedPointerListen
                     scrollAccumY = 0;
                 }
                 scrolling = true;
-            } else if (twoFingersDrag && rightHeld && finger2.travelDistance() >= MAX_TAP_TRAVEL_DISTANCE) {
-                // 双指右键拖拽：受 twoFingersDrag 开关控制；按住右键时指针绝对跟随另一指，
-                // 任意两指间距均生效；手指基本不动则不移动，保持纯双指右键点击
-                xServer.injectPointerMove(finger2.x, finger2.y);
-                skipPointerMove = true;
+            } else if (twoFingersDrag && rightHeld) {
+                // 双指右键拖拽：受 twoFingersDrag 开关控制；按住右键时指针绝对跟随“触发右键的那根指”，
+                // 而不是 findSecondFinger 动态返回的另一指，否则任一指移动都会把鼠标带到另一指处。
+                // 任意两指间距均生效；右键指基本不动则不移动，保持纯双指右键点击。
+                Finger target = (fingerPointerButtonRight != null) ? fingerPointerButtonRight : finger2;
+                if (target.travelDistance() >= MAX_TAP_TRAVEL_DISTANCE) {
+                    xServer.injectPointerMove(target.x, target.y);
+                    skipPointerMove = true;
+                }
             }
         }
         if (!scrolling && numFingers == 1 && !skipPointerMove) {
