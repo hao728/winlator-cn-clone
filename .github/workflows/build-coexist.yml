@@ -18,14 +18,29 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
+          lfs: false
           fetch-depth: 1
-          # 注意：不删除 assets，共存版必须保留并替换 assets 内的硬编码路径
 
       - name: 安装 zstandard
         run: pip install zstandard
 
       - name: 对 assets 做等长包名替换（核心步骤）
         run: python3 scripts/patch-assets.py
+
+      - name: 诊断：确认 assets 未丢失
+        run: |
+          echo "=== assets 目录大小 ==="
+          du -sh app/src/main/assets/
+          echo "=== rootfs.tzst 大小（应约 90MB+）==="
+          ls -lh app/src/main/assets/rootfs.tzst
+          echo "=== build.gradle 内容 ==="
+          cat app/build.gradle
+
+      - name: 加大 Gradle 内存
+        run: |
+          echo "org.gradle.jvmargs=-Xmx4g -XX:MaxMetaspaceSize=1g" >> gradle.properties
+          echo "org.gradle.parallel=true" >> gradle.properties
+          cat gradle.properties
 
       - name: Set up JDK
         uses: actions/setup-java@v4
@@ -48,14 +63,23 @@ jobs:
             -storepass android -keypass android \
             -dname "CN=Debug, OU=Debug, O=Debug, L=Debug, ST=Debug, C=US"
 
-      - name: 构建 Release APK
+      - name: 构建 Release APK（失败时输出完整错误）
         run: |
           chmod +x gradlew
-          ./gradlew assembleRelease --no-daemon \
+          ./gradlew assembleRelease --no-daemon --stacktrace \
             -Pandroid.injected.signing.store.file=$PWD/debug.keystore \
             -Pandroid.injected.signing.store.password=android \
             -Pandroid.injected.signing.key.alias=androiddebugkey \
-            -Pandroid.injected.signing.key.password=android
+            -Pandroid.injected.signing.key.password=android 2>&1 | tee build.log || {
+              echo "========== 构建失败，最后 150 行日志 =========="
+              tail -150 build.log
+              exit 1
+            }
+
+      - name: 确认 APK 大小
+        run: |
+          ls -lh app/build/outputs/apk/release/
+          echo "APK 应约 150-200MB（含 assets），如果只有几 MB 说明 assets 丢失"
 
       - name: 重命名 APK
         run: |

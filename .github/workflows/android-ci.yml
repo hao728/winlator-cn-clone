@@ -1,9 +1,7 @@
 name: 编译apk（仅编译java）
 
 on:
-  push:
-    branches: ['**']
-  workflow_dispatch:
+  workflow_dispatch:  # 已禁用 push 自动触发，避免与共存构建混淆；需要时手动运行
 
 env:
   JAVA_VERSION: '17'
