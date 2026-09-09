@@ -12,6 +12,10 @@ android {
         versionName "11.2.cn.03"
     }
 
+    buildFeatures {
+        buildConfig true
+    }
+
     buildTypes {
         debug {
             minifyEnabled true
