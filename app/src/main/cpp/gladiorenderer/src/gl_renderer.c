@@ -1300,13 +1300,16 @@ void GLRenderer_setDrawBuffer(GLRenderer* renderer, GLenum drawBuffer) {
     if (drawBuffer == GL_NONE || (drawBuffer >= GL_COLOR_ATTACHMENT0 && drawBuffer <= GL_COLOR_ATTACHMENT31)) {
         GLFramebuffer_setDrawBuffers(1, &drawBuffer);
     }
-    else if (renderer->displayBuffer != renderer->clientState.framebuffer[indexOfGLTarget(GL_DRAW_FRAMEBUFFER)]) {
-        // 只绑 DRAW 槽：glDrawBuffer 只描述 draw 目标，不应影响 READ。
+    else if (renderer->clientState.framebuffer[indexOfGLTarget(GL_DRAW_FRAMEBUFFER)] != 0) {
+        // GL_BACK=默认帧缓冲的后缓冲 → 把 DRAW 切回默认缓冲。槽值==0 表示客户端
+        // 已认为 DRAW=默认缓冲（真实层即 displayBuffer），无需动作；否则经 bind(0)
+        // 切回——0→displayBuffer 的映射在 bind 内部完成，槽位记 0，与客户端状态
+        // 缓存一致（存 displayBuffer 私有 id 会在它重建/删除后留下悬垂记录）。
         // 这里绝不能用 bind(GL_FRAMEBUFFER)（其 ARRAYS_FILL 会把客户端刚绑好的
-        // READ 槽一起覆盖成 displayBuffer，客户端状态缓存不知情、不再重绑，
+        // READ 槽一并覆盖成 0，客户端状态缓存不知情、不再重绑，
         // 之后 present 的 glBlitFramebuffer 源与目标同为 displayBuffer（同 FBO
         // 重叠拷贝）被 GLES 以 GL_INVALID_OPERATION 拒绝 → 游戏与桌面画面恒黑）。
-        GLFramebuffer_bind(GL_DRAW_FRAMEBUFFER, renderer->displayBuffer);
+        GLFramebuffer_bind(GL_DRAW_FRAMEBUFFER, 0);
     }
 }
 
