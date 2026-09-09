@@ -73,7 +73,9 @@ jobs:
             "app/src/main/cpp/gladiorenderer/CMakeLists.txt"
           )
           # 找出上游本次更新中触及的共存文件
-          CHANGED=$(git diff --name-only HEAD~1 HEAD 2>/dev/null || true)
+          # merge commit 有两个 parent：HEAD^1=合并前本地，HEAD^2=上游
+          # 对比两者能准确找出上游带来的变更文件
+          CHANGED=$(git diff --name-only HEAD^1 HEAD^2 2>/dev/null || git diff --name-only HEAD~1 HEAD 2>/dev/null || true)
           OVERLAP=""
           for f in "${COEXIST_FILES[@]}"; do
             if echo "$CHANGED" | grep -q "^${f}$"; then
