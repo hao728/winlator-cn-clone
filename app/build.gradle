@@ -5,11 +5,11 @@ android {
     compileSdk 35
 
     defaultConfig {
-        applicationId 'org.winlator'
+        applicationId '__APP_ID__'
         minSdkVersion 26
         targetSdkVersion 28
-        versionCode 32
-        versionName "11.2.cn.03"
+        versionCode __VERSION_CODE__
+        versionName "__VERSION_NAME__"
     }
 
     buildFeatures {
