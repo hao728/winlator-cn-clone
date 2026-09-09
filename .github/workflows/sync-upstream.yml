@@ -1,0 +1,62 @@
+name: 同步上游并自动构建
+
+on:
+  schedule:
+    - cron: '0 18 * * *'   # 每天 UTC 18:00 = 北京时间次日 02:00
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # 必须完整历史才能 merge
+
+      - name: 配置 git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: 添加上游并拉取
+        run: |
+          git remote add upstream https://github.com/hostei33/winlator-cn.git 2>/dev/null || true
+          git fetch upstream main
+
+      - name: 检查上游是否有新提交
+        id: check
+        run: |
+          LOCAL=$(git rev-parse HEAD)
+          REMOTE=$(git rev-parse upstream/main)
+          echo "local=$LOCAL remote=$REMOTE"
+          if [ "$LOCAL" = "$REMOTE" ]; then
+            echo "up_to_date=true" >> $GITHUB_OUTPUT
+            echo "上游无新提交，跳过。"
+          else
+            echo "up_to_date=false" >> $GITHUB_OUTPUT
+            echo "上游有新提交，开始合并。"
+          fi
+
+      - name: 合并上游（冲突时保留我们的改动）
+        if: steps.check.outputs.up_to_date == 'false'
+        run: |
+          git checkout main
+          # 合并上游；冲突文件保留我们的版本(--ours)，因为我们的改动是把硬编码改动态，兼容性好
+          git merge upstream/main --no-edit -X ours || {
+            echo "=== merge 产生冲突，对所有冲突文件保留我们的版本 ==="
+            git diff --name-only --diff-filter=U | while read f; do
+              git checkout --ours "$f"
+              git add "$f"
+            done
+            git -c core.editor=true merge --continue
+          }
+          git log --oneline -3
+          git push origin main
+
+      - name: 无更新时也手动触发一次构建（可选，确保 artifact 不过期）
+        if: steps.check.outputs.up_to_date == 'true'
+        run: echo "上游已是最新，本次不重复构建。"

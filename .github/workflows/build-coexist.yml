@@ -1,0 +1,72 @@
+name: 构建共存版APK
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+  workflow_dispatch:
+
+env:
+  JAVA_VERSION: '17'
+  NDK_VERSION: '24.0.8215888'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          # 注意：不删除 assets，共存版必须保留并替换 assets 内的硬编码路径
+
+      - name: 安装 zstandard
+        run: pip install zstandard
+
+      - name: 对 assets 做等长包名替换（核心步骤）
+        run: python3 scripts/patch-assets.py
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: 'temurin'
+          cache: 'gradle'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: 安装 NDK 和 CMake
+        run: sdkmanager --install "ndk;${{ env.NDK_VERSION }}" "cmake;3.22.1"
+
+      - name: 创建签名 keystore
+        run: |
+          keytool -genkey -v -keystore debug.keystore \
+            -alias androiddebugkey \
+            -keyalg RSA -keysize 2048 -validity 10000 \
+            -storepass android -keypass android \
+            -dname "CN=Debug, OU=Debug, O=Debug, L=Debug, ST=Debug, C=US"
+
+      - name: 构建 Release APK
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleRelease --no-daemon \
+            -Pandroid.injected.signing.store.file=$PWD/debug.keystore \
+            -Pandroid.injected.signing.store.password=android \
+            -Pandroid.injected.signing.key.alias=androiddebugkey \
+            -Pandroid.injected.signing.key.password=android
+
+      - name: 重命名 APK
+        run: |
+          SHA=$(git rev-parse --short HEAD)
+          TS=$(date +%Y%m%d-%H%M%S)
+          mv app/build/outputs/apk/release/app-release.apk "Winlator-coexist-${SHA}-${TS}.apk"
+          ls -lh *.apk
+
+      - name: 上传 APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: winlator-coexist-apk
+          path: "*.apk"
+          retention-days: 30
