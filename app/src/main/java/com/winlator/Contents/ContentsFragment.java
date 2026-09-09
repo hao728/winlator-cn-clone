@@ -1,477 +1,560 @@
-package com.winlator.container;
+package com.winlator.contents;
 
-import com.winlator.BuildConfig;
-import com.winlator.box64.Box64Preset;
-import com.winlator.core.AppUtils;
-import com.winlator.core.DefaultVersion;
-import com.winlator.core.EnvVars;
-import com.winlator.core.FileUtils;
-import com.winlator.core.KeyValueSet;
-import com.winlator.core.WineInfo;
-import com.winlator.core.WineThemeManager;
-import com.winlator.widget.FrameRating;
-import com.winlator.xenvironment.RootFS;
+import android.app.Activity;
+import android.content.Intent;
+import android.database.Cursor;
+import android.graphics.Color;
+import android.graphics.Typeface;
+import android.graphics.drawable.GradientDrawable;
+import android.net.Uri;
+import android.os.Build;
+import android.os.Bundle;
+import android.provider.OpenableColumns;
+import android.text.TextUtils;
+import android.util.Log;
+import android.util.TypedValue;
+import android.content.res.TypedArray;
+import android.view.Gravity;
+import android.view.LayoutInflater;
+import android.view.View;
+import android.view.ViewGroup;
+import android.widget.AdapterView;
+import android.widget.ArrayAdapter;
+import android.widget.Button;
+import android.widget.LinearLayout;
+import android.widget.ProgressBar;
+import android.widget.ScrollView;
+import android.widget.Spinner;
+import android.widget.TextView;
+import android.widget.Toast;
 
-import org.json.JSONException;
-import org.json.JSONObject;
+import androidx.activity.result.ActivityResultLauncher;
+import androidx.activity.result.contract.ActivityResultContracts;
+import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
+import androidx.appcompat.app.AlertDialog;      // 使用 AppCompat 版本支持深色模式
+import androidx.appcompat.app.AppCompatActivity;
+import androidx.fragment.app.Fragment;
+
+import com.winlator.core.TarCompressorUtils;
 
 import java.io.File;
-import java.util.Iterator;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.nio.file.Files;
+import java.nio.file.Paths;
+import java.util.Arrays;
 
-public class Container {
-    public static final String DEFAULT_ENV_VARS = "LC_ALL=zh_CN.utf8 ZINK_DESCRIPTORS=lazy ZINK_DEBUG=compact MESA_SHADER_CACHE_MAX_SIZE=512MB TU_DEBUG=noconform MESA_GL_VERSION_OVERRIDE=3.1 DXVK_HUD=fps,version TZ=Asia/Shanghai MESA_VK_WSI_DEBUG=-sw MESA_EXTENSION_MAX_YEAR=2025 BOX64_DYNAREC_WEAKBARRIER=-1 mesa_glthread=true WINEESYNC=1 MESA_SHADER_CACHE_DISABLE=false DXVK_ASYNC=1 DXVK_DISABLE_TIMELINE_SEMAPHORES=1 BOX64_MMAP32=1 LIBGL_ALWAYS_SOFTWARE=0 DRAW_USE_LLVM=0 GST_DEBUG=0 MANGOHUD=0 MANGOHUD_CONFIGFILE=/data/user/0/" + BuildConfig.APPLICATION_ID + "/files/rootfs/home/mangohud2.conf";
-    public static final String DEFAULT_SCREEN_SIZE = "1280x720";
-    public static final String DEFAULT_SCREEN_ORIENTATION = "landscape";
-    public static final boolean DEFAULT_SWAP_RESOLUTION = false;
-    public static final String DEFAULT_AUDIO_DRIVER = AudioDrivers.ALSA;
-    public static final String DEFAULT_DXWRAPPER = DXWrappers.DXVK;
-    public static final String DEFAULT_WINCOMPONENTS = "direct3d=1,directsound=1,directmusic=1,directshow=0,directplay=0,xaudio=1,vcrun2005=0,vcrun2010=1,wmdecoder=1";
-    public static final String FALLBACK_WINCOMPONENTS = "direct3d=0,directsound=0,directmusic=0,directshow=0,directplay=0,xaudio=0,vcrun2005=0,vcrun2010=0,wmdecoder=0";
-    public static final String DEFAULT_DRIVES = "D:"+AppUtils.DIRECTORY_DOWNLOADS +"E:"+AppUtils.INTERNAL_STORAGE;
-    public static final byte STARTUP_SELECTION_NORMAL = 0;
-    public static final byte STARTUP_SELECTION_ESSENTIAL = 1;
-    public static final byte STARTUP_SELECTION_AGGRESSIVE = 2;
-    public static final byte MAX_DRIVE_LETTERS = 8;
-    public final int id;
-    private String name;
-    private String screenSize = DEFAULT_SCREEN_SIZE;
-    private String screenOrientation = DEFAULT_SCREEN_ORIENTATION;
-    private boolean swapResolution = DEFAULT_SWAP_RESOLUTION;
-    private String envVars = DEFAULT_ENV_VARS;
-    private String graphicsDriver = GraphicsDrivers.DEFAULT_VULKAN_DRIVER+","+ GraphicsDrivers.DEFAULT_OPENGL_DRIVER;
-    private String dxwrapper = DEFAULT_DXWRAPPER;
-    private String dxwrapperConfig = "";
-    private String graphicsDriverConfig = "";
-    private String audioDriverConfig = "";
-    private String wincomponents = DEFAULT_WINCOMPONENTS;
-    private String audioDriver = DEFAULT_AUDIO_DRIVER;
-    private String drives = DEFAULT_DRIVES;
-    private String wineVersion = WineInfo.MAIN_WINE_INFO.identifier();
-    private byte hudMode = (byte)FrameRating.Mode.DISABLED.ordinal();
-    private byte startupSelection = STARTUP_SELECTION_ESSENTIAL;
-    private String cpuList;
-    private String cpuListWoW64;
-    private String desktopTheme = WineThemeManager.DEFAULT_DESKTOP_THEME;
-    private String box64Preset = Box64Preset.DEFAULT;
-    private String box64Version = DefaultVersion.BOX64;
-    private File rootDir;
-    private JSONObject extraData;
+public class ContentsFragment extends Fragment {
+    private static final String[] FILE_TYPES = {"dxvk", "box64", "turnip", "virgl", "vkd3d", "wine", "proton"};
+    private static final String WHP_EXTENSION = ".whp";
+    private static final String TZSD_EXTENSION = ".tzst";
+    private static final int CORNER_RADIUS_DP = 12;
+    private static final int ELEVATION_DP = 4;
 
-    public Container(int id) {
-        this.id = id;
-        this.name = "Container-"+id;
+    private static boolean isWineOrProton(String category) {
+        return category.equalsIgnoreCase("wine") || category.equalsIgnoreCase("proton");
     }
 
-    public String getName() {
+    private String baseFilesPath;
+    private String currentStoragePath = "installed_components";
+    private String currentInstallPath = "";
+
+    private LinearLayout fileListContainer;
+    private Spinner categorySpinner;
+    private String currentCategory = FILE_TYPES[0];
+    private String installCategory;
+    private Uri selectedFileUri;
+
+    private AlertDialog installProgressDialog;
+
+    private final ActivityResultLauncher<Intent> filePickerLauncher =
+            registerForActivityResult(new ActivityResultContracts.StartActivityForResult(), result -> {
+                if (result.getResultCode() == Activity.RESULT_OK && result.getData() != null) {
+                    selectedFileUri = result.getData().getData();
+                    validateSelectedFile();
+                }
+            });
+
+    @Override
+    public void onCreate(@Nullable Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        baseFilesPath = requireContext().getFilesDir().getAbsolutePath();
+        initDirectories();
+    }
+
+    @Override
+    public void onViewCreated(@NonNull View view, @Nullable Bundle savedInstanceState) {
+        super.onViewCreated(view, savedInstanceState);
+        AppCompatActivity activity = (AppCompatActivity) getActivity();
+        if (activity != null && activity.getSupportActionBar() != null) {
+            activity.getSupportActionBar().setTitle("组件管理");
+        }
+    }
+
+    @Override
+    public void onDestroyView() {
+        super.onDestroyView();
+        dismissInstallProgressDialog();
+    }
+
+    private void initDirectories() {
+        File imageFsDir = new File(requireContext().getFilesDir(), "imagefs");
+        if (!imageFsDir.exists()) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                try {
+                    Files.createSymbolicLink(imageFsDir.toPath(), Paths.get("./rootfs"));
+                    Log.d("Symlink", "符号链接创建成功");
+                } catch (Exception e) {
+                    Log.e("Symlink", "创建符号链接失败", e);
+                }
+            } else {
+                Log.w("Symlink", "符号链接需要 Android 8+，跳过创建");
+            }
+        }
+
+        File wineDir = new File(baseFilesPath, "rootfs/opt/installed-wine");
+        if (!wineDir.exists() && wineDir.mkdirs()) {
+            try {
+                new ProcessBuilder("chmod", "-R", "771", wineDir.getAbsolutePath())
+                        .start()
+                        .waitFor();
+            } catch (IOException | InterruptedException e) {
+                e.printStackTrace();
+            }
+        }
+    }
+
+    @Nullable
+    @Override
+    public View onCreateView(@NonNull LayoutInflater inflater, @Nullable ViewGroup container,
+                             @Nullable Bundle savedInstanceState) {
+        LinearLayout root = new LinearLayout(requireContext());
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setBackgroundColor(getColorFromAttr(android.R.attr.colorBackground, Color.parseColor("#FAFAFA"), Color.parseColor("#121212")));
+        int padding = dpToPx(16);
+        root.setPadding(padding, padding, padding, padding);
+
+        TextView title = new TextView(requireContext());
+        title.setText("选择附加类型");
+        title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 18);
+        title.setTypeface(Typeface.DEFAULT_BOLD);
+        title.setPadding(0, 0, 0, dpToPx(12));
+        root.addView(title);
+
+        categorySpinner = new Spinner(requireContext());
+        ArrayAdapter<String> adapter = new ArrayAdapter<>(requireContext(),
+                android.R.layout.simple_spinner_dropdown_item, FILE_TYPES);
+        categorySpinner.setAdapter(adapter);
+        int cardBgColor = getColorFromAttr(android.R.attr.colorBackground, Color.parseColor("#FFFFFF"), Color.parseColor("#121212"));
+        categorySpinner.setBackground(createRoundedBackground(cardBgColor, CORNER_RADIUS_DP));
+        categorySpinner.setPadding(dpToPx(16), dpToPx(12), dpToPx(16), dpToPx(12));
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            categorySpinner.setElevation(dpToPx(ELEVATION_DP));
+        }
+        categorySpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+            @Override
+            public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
+                currentCategory = FILE_TYPES[position];
+                refreshFileList();
+            }
+
+            @Override
+            public void onNothingSelected(AdapterView<?> parent) {}
+        });
+        root.addView(categorySpinner, createLayoutParams(16));
+
+        // 滚动列表
+        ScrollView scroll = new ScrollView(requireContext());
+        fileListContainer = new LinearLayout(requireContext());
+        fileListContainer.setOrientation(LinearLayout.VERTICAL);
+        scroll.addView(fileListContainer);
+        root.addView(scroll, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1));
+
+        // 安装按钮
+        Button installBtn = new Button(requireContext());
+        installBtn.setText("选择安装文件");
+        installBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
+        installBtn.setTextColor(Color.WHITE);
+        installBtn.setTypeface(Typeface.DEFAULT_BOLD);
+        installBtn.setAllCaps(false);
+        int primaryColor = getColorFromAttr(android.R.attr.colorPrimary, Color.parseColor("#2196F3"), Color.parseColor("#2196F3"));
+        installBtn.setBackground(createRoundedBackground(primaryColor, CORNER_RADIUS_DP));
+        installBtn.setPadding(0, dpToPx(14), 0, dpToPx(14));
+        installBtn.setOnClickListener(v -> {
+            Intent intent = new Intent(Intent.ACTION_GET_CONTENT);
+            intent.setType("*/*");
+            filePickerLauncher.launch(intent);
+        });
+        root.addView(installBtn, createLayoutParams(24));
+
+        refreshFileList();
+        return root;
+    }
+
+    private int getColorFromAttr(int attr, int lightDefault, int darkDefault) {
+        TypedArray ta = requireContext().getTheme().obtainStyledAttributes(new int[]{attr});
+        int color = ta.getColor(0, 0);
+        ta.recycle();
+        if (color != 0) return color;
+
+        int nightMode = getResources().getConfiguration().uiMode & android.content.res.Configuration.UI_MODE_NIGHT_MASK;
+        return nightMode == android.content.res.Configuration.UI_MODE_NIGHT_YES ? darkDefault : lightDefault;
+    }
+
+    private void validateSelectedFile() {
+        if (selectedFileUri == null) {
+            showToast("无效文件选择");
+            return;
+        }
+
+        String fileName = extractFileName(selectedFileUri);
+        if (fileName == null) {
+            showToast("无效文件选择");
+            return;
+        }
+
+        String detected = detectCategory(fileName);
+        if (detected == null) {
+            showToast("无法识别文件类别，请确保文件名包含 " + TextUtils.join(", ", FILE_TYPES));
+            return;
+        }
+        if (!fileName.toLowerCase().endsWith(WHP_EXTENSION)) {
+            showToast("请选择 .whp 文件");
+            return;
+        }
+
+        installCategory = detected;
+        showInstallDialog(fileName);
+    }
+
+    private String detectCategory(String fileName) {
+        String lower = fileName.toLowerCase();
+        for (String type : FILE_TYPES) {
+            if (lower.contains(type.toLowerCase())) return type;
+        }
+        return null;
+    }
+
+    private void showInstallDialog(String fileName) {
+        new AlertDialog.Builder(requireContext())
+                .setTitle("安全提示")
+                .setMessage("即将安装：" + fileName + "\n请确认文件来源可靠")
+                .setPositiveButton("确认安装", (d, w) -> {
+                    showInstallProgressDialog();
+                    new Thread(() -> {
+                        try {
+                            performInstall(fileName);
+                            requireActivity().runOnUiThread(() -> {
+                                dismissInstallProgressDialog();
+                                showToast("✔ 安装完成");
+                                currentCategory = installCategory;
+                                int pos = Arrays.asList(FILE_TYPES).indexOf(currentCategory);
+                                if (pos >= 0) categorySpinner.setSelection(pos);
+                                refreshFileList();
+                            });
+                        } catch (Exception e) {
+                            requireActivity().runOnUiThread(() -> {
+                                dismissInstallProgressDialog();
+                                showToast("✘ 安装失败: " + e.getMessage());
+                            });
+                        }
+                    }).start();
+                })
+                .setNegativeButton("取消操作", null)
+                .show();
+    }
+
+    private void showInstallProgressDialog() {
+        if (installProgressDialog != null && installProgressDialog.isShowing()) return;
+
+        LinearLayout layout = new LinearLayout(requireContext());
+        layout.setOrientation(LinearLayout.VERTICAL);
+        layout.setPadding(dpToPx(24), dpToPx(24), dpToPx(24), dpToPx(24));
+        layout.setGravity(Gravity.CENTER);
+
+        ProgressBar progressBar = new ProgressBar(requireContext());
+        progressBar.setIndeterminate(true);
+        layout.addView(progressBar);
+
+        TextView message = new TextView(requireContext());
+        message.setText("正在安装，请稍候...");
+        message.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+        message.setPadding(0, dpToPx(16), 0, 0);
+        layout.addView(message);
+
+        AlertDialog.Builder builder = new AlertDialog.Builder(requireContext());
+        builder.setView(layout);
+        builder.setCancelable(false);
+        installProgressDialog = builder.create();
+        installProgressDialog.show();
+    }
+
+    private void dismissInstallProgressDialog() {
+        if (installProgressDialog != null && installProgressDialog.isShowing()) {
+            installProgressDialog.dismiss();
+            installProgressDialog = null;
+        }
+    }
+
+    private void performInstall(String fileName) throws Exception {
+        boolean isWine = isWineOrProton(installCategory);
+        String storagePath = isWine ? "rootfs/opt/installed-wine" : "installed_components";
+        String installPath = isWine ? "" : installCategory;
+        File targetDir = new File(baseFilesPath, storagePath + File.separator + installPath);
+        if (!targetDir.exists() && !targetDir.mkdirs()) {
+            throw new Exception("目录创建失败");
+        }
+
+        String baseName = fileName.replaceAll("(?i)" + WHP_EXTENSION + "$", "");
+        try (InputStream input = requireContext().getContentResolver().openInputStream(selectedFileUri)) {
+            if (input == null) throw new Exception("无法读取文件");
+
+            if (isWine) {
+                TarCompressorUtils.Type type = detectCompressionType(selectedFileUri);
+                if (type == null) throw new Exception("不支持的文件格式，请提供 XZ 或 ZSTD 压缩的 Wine/Proton 包");
+                if (!TarCompressorUtils.extract(type, requireContext(), selectedFileUri, targetDir, null)) {
+                    throw new Exception("解压失败");
+                }
+            } else {
+                File outFile = new File(targetDir, baseName + TZSD_EXTENSION);
+                try (OutputStream output = new FileOutputStream(outFile)) {
+                    byte[] buffer = new byte[8192];
+                    int len;
+                    while ((len = input.read(buffer)) != -1) output.write(buffer, 0, len);
+                }
+            }
+        }
+    }
+
+    private TarCompressorUtils.Type detectCompressionType(Uri uri) throws IOException {
+        byte[] magic = new byte[6];
+        try (InputStream is = requireContext().getContentResolver().openInputStream(uri)) {
+            if (is == null || is.read(magic) < 4) return null;
+            if ((magic[0] & 0xFF) == 0xFD && (magic[1] & 0xFF) == 0x37 &&
+                (magic[2] & 0xFF) == 0x7A && (magic[3] & 0xFF) == 0x58 &&
+                (magic[4] & 0xFF) == 0x5A && (magic[5] & 0xFF) == 0x00) {
+                return TarCompressorUtils.Type.XZ;
+            }
+            if ((magic[0] & 0xFF) == 0x28 && (magic[1] & 0xFF) == 0xB5 &&
+                (magic[2] & 0xFF) == 0x2F && (magic[3] & 0xFF) == 0xFD) {
+                return TarCompressorUtils.Type.ZSTD;
+            }
+            return null;
+        }
+    }
+
+    private void sanitizeWineFolderNames(File dir) {
+        if (dir == null || !dir.exists() || !dir.isDirectory()) return;
+        File[] folders = dir.listFiles(File::isDirectory);
+        if (folders == null) return;
+
+        for (File folder : folders) {
+            String oldName = folder.getName();
+            if (oldName.endsWith("-")) {
+                String newName = oldName.substring(0, oldName.length() - 1);
+                File newFolder = new File(folder.getParent(), newName);
+                if (folder.renameTo(newFolder)) {
+                    Log.d("WineFolder", "重命名文件夹: " + oldName + " -> " + newName);
+                    String version = extractVersionFromName(oldName);
+                    if (version != null) {
+                        File oldPattern = new File(folder.getParent(), "container-pattern-" + version + ".tzst");
+                        if (oldPattern.exists()) {
+                            String newVersion = extractVersionFromName(newName);
+                            if (newVersion != null) {
+                                File newPattern = new File(folder.getParent(), "container-pattern-" + newVersion + ".tzst");
+                                oldPattern.renameTo(newPattern);
+                                Log.d("WineFolder", "重命名 pattern: " + oldPattern.getName() + " -> " + newPattern.getName());
+                            }
+                        }
+                    }
+                } else {
+                    Log.e("WineFolder", "重命名失败: " + oldName);
+                }
+            }
+        }
+    }
+
+    private String extractVersionFromName(String folderName) {
+        int dash = folderName.indexOf('-');
+        if (dash == -1) return null;
+        String version = folderName.substring(dash + 1);
+        if (version.endsWith("-")) version = version.substring(0, version.length() - 1);
+        return version;
+    }
+
+    private void refreshFileList() {
+        boolean isWine = isWineOrProton(currentCategory);
+        currentStoragePath = isWine ? "rootfs/opt/installed-wine" : "installed_components";
+        currentInstallPath = isWine ? "" : currentCategory;
+
+        fileListContainer.removeAllViews();
+        File dir = new File(baseFilesPath, currentStoragePath + File.separator + currentInstallPath);
+        if (!dir.exists() || !dir.isDirectory()) {
+            showEmptyState();
+            return;
+        }
+
+        if (isWine) {
+            sanitizeWineFolderNames(dir);
+        }
+
+        File[] files = dir.listFiles();
+        if (files == null || files.length == 0) {
+            showEmptyState();
+            return;
+        }
+
+        boolean hasEntries = false;
+        for (File f : files) {
+            if (isWine) {
+                if (f.isDirectory()) {
+                    addFileEntry(f.getName());
+                    hasEntries = true;
+                }
+            } else {
+                String name = f.isFile() ? f.getName().replace(TZSD_EXTENSION, "") : f.getName();
+                addFileEntry(name);
+                hasEntries = true;
+            }
+        }
+        if (!hasEntries) showEmptyState();
+    }
+
+    private void showEmptyState() {
+        TextView empty = new TextView(requireContext());
+        empty.setText("当前无已安装项目");
+        empty.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+        empty.setGravity(Gravity.CENTER);
+        empty.setPadding(0, dpToPx(32), 0, 0);
+        fileListContainer.addView(empty);
+    }
+
+    private void addFileEntry(String name) {
+        LinearLayout item = new LinearLayout(requireContext());
+        item.setOrientation(LinearLayout.HORIZONTAL);
+        int cardBgColor = getColorFromAttr(android.R.attr.colorBackground, Color.parseColor("#FFFFFF"), Color.parseColor("#121212"));
+        item.setBackground(createRoundedBackground(cardBgColor, CORNER_RADIUS_DP));
+        item.setPadding(dpToPx(16), dpToPx(12), dpToPx(16), dpToPx(12));
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            item.setElevation(dpToPx(ELEVATION_DP / 2));
+        }
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        lp.setMargins(0, 0, 0, dpToPx(8));
+        item.setLayoutParams(lp);
+
+        TextView tv = new TextView(requireContext());
+        tv.setText(name);
+        tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
+        tv.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+        item.addView(tv);
+
+        item.setOnLongClickListener(v -> {
+            showDeleteDialog(name);
+            return true;
+        });
+        fileListContainer.addView(item);
+    }
+
+    private void showDeleteDialog(String name) {
+        new AlertDialog.Builder(requireContext())
+                .setTitle("确认")
+                .setMessage("确定删除 " + name + " 吗？")
+                .setPositiveButton("确定删除", (d, w) -> deleteFile(name))
+                .setNegativeButton("取消操作", null)
+                .show();
+    }
+
+    private void deleteFile(String name) {
+        File target = new File(baseFilesPath, currentStoragePath + File.separator + currentInstallPath + File.separator + name);
+        boolean success;
+        if (isWineOrProton(currentCategory)) {
+            int dash = name.indexOf('-');
+            if (dash == -1) {
+                showToast("无法识别版本");
+                return;
+            }
+            String version = name.substring(dash + 1);
+            if (version.endsWith("-")) version = version.substring(0, version.length() - 1);
+            File pattern = new File(baseFilesPath, currentStoragePath + File.separator + currentInstallPath +
+                    File.separator + "container-pattern-" + version + ".tzst");
+            pattern.delete();
+            success = deleteRecursive(target);
+        } else {
+            success = new File(target.getAbsolutePath() + TZSD_EXTENSION).delete();
+        }
+        if (success) {
+            showToast("✔ 删除成功");
+            refreshFileList();
+        } else {
+            showToast("✘ 删除失败");
+        }
+    }
+
+    private boolean deleteRecursive(File file) {
+        if (isSymbolicLink(file)) return file.delete();
+        if (file.isDirectory()) {
+            File[] children = file.listFiles();
+            if (children != null) {
+                for (File child : children) deleteRecursive(child);
+            }
+        }
+        return file.delete();
+    }
+
+    private boolean isSymbolicLink(File file) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            return Files.isSymbolicLink(file.toPath());
+        } else {
+            try {
+                return !file.getCanonicalPath().equals(file.getAbsolutePath());
+            } catch (IOException e) {
+                return false;
+            }
+        }
+    }
+
+    private GradientDrawable createRoundedBackground(int color, int radiusDP) {
+        GradientDrawable gd = new GradientDrawable();
+        gd.setShape(GradientDrawable.RECTANGLE);
+        gd.setCornerRadius(dpToPx(radiusDP));
+        gd.setColor(color);
+        return gd;
+    }
+
+    private LinearLayout.LayoutParams createLayoutParams(int marginDP) {
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        lp.setMargins(0, dpToPx(marginDP), 0, dpToPx(marginDP));
+        return lp;
+    }
+
+    private String extractFileName(Uri uri) {
+        String name = null;
+        if ("content".equals(uri.getScheme())) {
+            try (Cursor cursor = requireContext().getContentResolver().query(uri, null, null, null, null)) {
+                if (cursor != null && cursor.moveToFirst()) {
+                    int idx = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME);
+                    name = cursor.getString(idx);
+                }
+            }
+        }
+        if (name == null) {
+            String path = uri.getPath();
+            if (path != null) name = path.substring(path.lastIndexOf('/') + 1);
+        }
         return name;
     }
 
-    public void setName(String name) {
-        this.name = name;
+    private int dpToPx(float dp) {
+        return (int) TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, dp,
+                requireContext().getResources().getDisplayMetrics());
     }
 
-    public String getScreenSize() {
-        return screenSize;
-    }
-
-    public void setScreenSize(String screenSize) {
-        this.screenSize = screenSize;
-    }
-
-    public String getScreenOrientation() {
-        return screenOrientation;
-    }
-
-    public void setScreenOrientation(String screenOrientation) {
-        this.screenOrientation = screenOrientation;
-    }
-
-    public boolean isSwapResolution() {
-        return swapResolution;
-    }
-
-    public void setSwapResolution(boolean swapResolution) {
-        this.swapResolution = swapResolution;
-    }
-
-    public String getEnvVars() {
-        return envVars;
-    }
-
-    public void setEnvVars(String envVars) {
-        this.envVars = envVars != null ? envVars : "";
-    }
-
-    public String getGraphicsDriver() {
-        return graphicsDriver;
-    }
-
-    public void setGraphicsDriver(String graphicsDriver) {
-        this.graphicsDriver = graphicsDriver;
-    }
-
-    public String getDXWrapper() {
-        return dxwrapper;
-    }
-
-    public void setDXWrapper(String dxwrapper) {
-        this.dxwrapper = dxwrapper;
-    }
-
-    public String getGraphicsDriverConfig() {
-        return graphicsDriverConfig;
-    }
-
-    public void setGraphicsDriverConfig(String graphicsDriverConfig) {
-        this.graphicsDriverConfig = graphicsDriverConfig != null ? graphicsDriverConfig : "";
-    }
-
-    public String getDXWrapperConfig() {
-        return dxwrapperConfig;
-    }
-
-    public void setDXWrapperConfig(String dxwrapperConfig) {
-        this.dxwrapperConfig = dxwrapperConfig != null ? dxwrapperConfig : "";
-    }
-
-    public String getAudioDriverConfig() {
-        return audioDriverConfig;
-    }
-
-    public void setAudioDriverConfig(String audioDriverConfig) {
-        this.audioDriverConfig = audioDriverConfig != null ? audioDriverConfig : "";
-    }
-
-    public String getAudioDriver() {
-        return audioDriver;
-    }
-
-    public void setAudioDriver(String audioDriver) {
-        this.audioDriver = audioDriver;
-    }
-
-    public String getWinComponents() {
-        return wincomponents;
-    }
-
-    public void setWinComponents(String wincomponents) {
-        this.wincomponents = wincomponents;
-    }
-
-    public String getDrives() {
-        return drives;
-    }
-
-    public void setDrives(String drives) {
-        this.drives = drives;
-    }
-
-    public byte getHUDMode() {
-        return hudMode;
-    }
-
-    public void setHUDMode(byte hudMode) {
-        this.hudMode = hudMode;
-    }
-
-    public byte getStartupSelection() {
-        return startupSelection;
-    }
-
-    public void setStartupSelection(byte startupSelection) {
-        this.startupSelection = startupSelection;
-    }
-
-    public String getCPUList() {
-        return getCPUList(false);
-    }
-
-    public String getCPUList(boolean allowFallback) {
-        return cpuList != null ? cpuList : (allowFallback ? getFallbackCPUList() : null);
-    }
-
-    public void setCPUList(String cpuList) {
-        this.cpuList = cpuList != null && !cpuList.isEmpty() ? cpuList : null;
-    }
-
-    public String getCPUListWoW64() {
-        return getCPUListWoW64(false);
-    }
-
-    public String getCPUListWoW64(boolean allowFallback) {
-        return cpuListWoW64 != null ? cpuListWoW64 : (allowFallback ? getFallbackCPUList() : null);
-    }
-
-    public void setCPUListWoW64(String cpuListWoW64) {
-        this.cpuListWoW64 = cpuListWoW64 != null && !cpuListWoW64.isEmpty() ? cpuListWoW64 : null;
-    }
-
-    public String getBox64Preset() {
-        return box64Preset;
-    }
-
-    public void setBox64Preset(String box64Preset) {
-        this.box64Preset = box64Preset;
-    }
-
-    public String getBox64Version() {
-        return box64Version;
-    }
-
-    public void setBox64Version(String box64Version) {
-        this.box64Version = box64Version;
-    }
-
-    public File getRootDir() {
-        return rootDir;
-    }
-
-    public void setRootDir(File rootDir) {
-        this.rootDir = rootDir;
-    }
-
-    public void setExtraData(JSONObject extraData) {
-        this.extraData = extraData;
-    }
-
-    public String getExtra(String name) {
-        return getExtra(name, "");
-    }
-
-    public String getExtra(String name, String fallback) {
-        try {
-            return extraData != null && extraData.has(name) ? extraData.getString(name) : fallback;
-        }
-        catch (JSONException e) {
-            return fallback;
-        }
-    }
-
-    public void putExtra(String name, Object value) {
-        if (extraData == null) extraData = new JSONObject();
-        try {
-            if (value != null) {
-                extraData.put(name, value);
-            }
-            else extraData.remove(name);
-        }
-        catch (JSONException e) {}
-    }
-
-    public String getWineVersion() {
-        return wineVersion;
-    }
-
-    public void setWineVersion(String wineVersion) {
-        this.wineVersion = wineVersion;
-    }
-
-    public File getConfigFile() {
-        return new File(rootDir, ".container");
-    }
-
-    public File getUserDir() {
-        return new File(rootDir, ".wine/drive_c/users/"+ RootFS.USER+"/");
-    }
-
-    public File getStartMenuDir() {
-        return new File(rootDir, ".wine/drive_c/ProgramData/Microsoft/Windows/Start Menu/");
-    }
-
-    public File getIconsDir(int size) {
-        return new File(rootDir, ".local/share/icons/hicolor/"+size+"x"+size+"/apps/");
-    }
-
-    public String getDesktopTheme() {
-        return desktopTheme;
-    }
-
-    public void setDesktopTheme(String desktopTheme) {
-        this.desktopTheme = desktopTheme;
-    }
-
-    public Iterable<Drive> drivesIterator() {
-        return drivesIterator(drives);
-    }
-
-    public static Iterable<Drive> drivesIterator(final String drives) {
-        final int[] index = {drives.indexOf(":")};
-        return () -> new Iterator<Drive>() {
-            @Override
-            public boolean hasNext() {
-                return index[0] != -1;
-            }
-
-            @Override
-            public Drive next() {
-                String letter = String.valueOf(drives.charAt(index[0]-1));
-                int nextIndex = drives.indexOf(":", index[0]+1);
-                String path = drives.substring(index[0]+1, nextIndex != -1 ? nextIndex-1 : drives.length());
-                index[0] = nextIndex;
-                return new Drive(letter, path);
-            }
-        };
-    }
-
-    public void saveData() {
-        try {
-            JSONObject data = new JSONObject();
-            data.put("id", id);
-            data.put("name", name);
-            data.put("screenSize", screenSize);
-            data.put("screenOrientation", screenOrientation);
-            data.put("swapResolution", swapResolution);
-            data.put("envVars", envVars);
-            data.put("cpuList", cpuList);
-            data.put("cpuListWoW64", cpuListWoW64);
-            data.put("graphicsDriver", graphicsDriver);
-            data.put("dxwrapper", dxwrapper);
-            if (!dxwrapperConfig.isEmpty()) data.put("dxwrapperConfig", dxwrapperConfig);
-            if (!graphicsDriverConfig.isEmpty()) data.put("graphicsDriverConfig", graphicsDriverConfig);
-            if (!audioDriverConfig.isEmpty()) data.put("audioDriverConfig", audioDriverConfig);
-            data.put("audioDriver", audioDriver);
-            data.put("wincomponents", wincomponents);
-            data.put("drives", drives);
-            data.put("hudMode", hudMode);
-            data.put("startupSelection", startupSelection);
-            data.put("box64Preset", box64Preset);
-            data.put("box64Version", box64Version);
-            data.put("desktopTheme", desktopTheme);
-            data.put("extraData", extraData);
-
-            if (!WineInfo.isMainWineVersion(wineVersion)) data.put("wineVersion", wineVersion);
-            FileUtils.writeString(getConfigFile(), data.toString());
-        }
-        catch (JSONException e) {}
-    }
-
-    public void loadData(JSONObject data) throws JSONException {
-        wineVersion = WineInfo.MAIN_WINE_INFO.identifier();
-        dxwrapperConfig = "";
-        graphicsDriverConfig = "";
-        audioDriverConfig = "";
-
-        checkObsoleteOrMissingProperties(data);
-
-        for (Iterator<String> it = data.keys(); it.hasNext(); ) {
-            String key = it.next();
-            switch (key) {
-                case "name" :
-                    setName(data.getString(key));
-                    break;
-                case "screenSize" :
-                    setScreenSize(data.getString(key));
-                    break;
-                case "screenOrientation" :
-                    setScreenOrientation(data.getString(key));
-                    break;
-                case "swapResolution" :
-                    setSwapResolution(data.getBoolean(key));
-                    break;
-                case "envVars" :
-                    setEnvVars(data.getString(key));
-                    break;
-                case "cpuList" :
-                    setCPUList(data.getString(key));
-                    break;
-                case "cpuListWoW64" :
-                    setCPUListWoW64(data.getString(key));
-                    break;
-                case "graphicsDriver" :
-                    setGraphicsDriver(data.getString(key));
-                    break;
-                case "wincomponents" :
-                    setWinComponents(data.getString(key));
-                    break;
-                case "dxwrapper" :
-                    setDXWrapper(data.getString(key));
-                    break;
-                case "dxwrapperConfig" :
-                    setDXWrapperConfig(data.getString(key));
-                    break;
-                case "graphicsDriverConfig" :
-                    setGraphicsDriverConfig(data.getString(key));
-                    break;
-                case "audioDriverConfig" :
-                    setAudioDriverConfig(data.getString(key));
-                    break;
-                case "drives" :
-                    setDrives(data.getString(key));
-                    break;
-                case "showFPS" :
-                    setHUDMode((byte)(data.getBoolean(key) ? FrameRating.Mode.SIMPLE.ordinal() : FrameRating.Mode.DISABLED.ordinal()));
-                    break;
-                case "hudMode" :
-                    setHUDMode((byte)data.getInt(key));
-                    break;
-                case "startupSelection" :
-                    setStartupSelection((byte)data.getInt(key));
-                    break;
-                case "extraData" : {
-                    JSONObject extraData = data.getJSONObject(key);
-                    checkObsoleteOrMissingProperties(extraData);
-                    setExtraData(extraData);
-                    break;
-                }
-                case "wineVersion" :
-                    setWineVersion(data.getString(key));
-                    break;
-                case "box64Preset" :
-                    setBox64Preset(data.getString(key));
-                    break;
-                case "box64Version" :
-                    setBox64Version(data.getString(key));
-                    break;
-                case "audioDriver" :
-                    setAudioDriver(data.getString(key));
-                    break;
-                case "desktopTheme" :
-                    setDesktopTheme(data.getString(key));
-                    break;
-            }
-        }
-    }
-
-    public static void checkObsoleteOrMissingProperties(JSONObject data) {
-        try {
-            if (data.has("extraData")) {
-                JSONObject extraData = data.getJSONObject("extraData");
-                int appVersion = Integer.parseInt(extraData.optString("appVersion", "0"));
-
-                if (appVersion < 16 && data.has("envVars")) {
-                    EnvVars defaultEnvVars = new EnvVars(DEFAULT_ENV_VARS);
-                    EnvVars envVars = new EnvVars(data.getString("envVars"));
-                    for (String name : defaultEnvVars) if (!envVars.has(name)) envVars.put(name, defaultEnvVars.get(name));
-                    data.put("envVars", envVars.toString());
-                }
-            }
-
-            KeyValueSet wincomponents1 = new KeyValueSet(DEFAULT_WINCOMPONENTS);
-            KeyValueSet wincomponents2 = new KeyValueSet(data.getString("wincomponents"));
-            String result = "";
-
-            for (String[] wincomponent1 : wincomponents1) {
-                String value = wincomponent1[1];
-
-                for (String[] wincomponent2 : wincomponents2) {
-                    if (wincomponent1[0].equals(wincomponent2[0])) {
-                        value = wincomponent2[1];
-                        break;
-                    }
-                }
-
-                result += (!result.isEmpty() ? "," : "")+wincomponent1[0]+"="+value;
-            }
-
-            data.put("wincomponents", result);
-        }
-        catch (JSONException e) {}
-    }
-
-    public static String getFallbackCPUList() {
-        String cpuList = "";
-        int numProcessors = Runtime.getRuntime().availableProcessors();
-        for (int i = 0; i < numProcessors; i++) cpuList += (!cpuList.isEmpty() ? "," : "")+i;
-        return cpuList;
+    private void showToast(String msg) {
+        Toast.makeText(requireContext(), msg, Toast.LENGTH_SHORT).show();
     }
 }
