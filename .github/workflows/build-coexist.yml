@@ -33,14 +33,11 @@ jobs:
           du -sh app/src/main/assets/
           echo "=== rootfs.tzst 大小（应约 90MB+）==="
           ls -lh app/src/main/assets/rootfs.tzst
-          echo "=== build.gradle 内容 ==="
-          cat app/build.gradle
 
       - name: 加大 Gradle 内存
         run: |
           echo "org.gradle.jvmargs=-Xmx4g -XX:MaxMetaspaceSize=1g" >> gradle.properties
           echo "org.gradle.parallel=true" >> gradle.properties
-          cat gradle.properties
 
       - name: Set up JDK
         uses: actions/setup-java@v4
@@ -63,18 +60,27 @@ jobs:
             -storepass android -keypass android \
             -dname "CN=Debug, OU=Debug, O=Debug, L=Debug, ST=Debug, C=US"
 
-      - name: 构建 Release APK（失败时输出完整错误）
+      - name: 构建 Release APK
         run: |
           chmod +x gradlew
+          set +e
           ./gradlew assembleRelease --no-daemon --stacktrace \
             -Pandroid.injected.signing.store.file=$PWD/debug.keystore \
             -Pandroid.injected.signing.store.password=android \
             -Pandroid.injected.signing.key.alias=androiddebugkey \
-            -Pandroid.injected.signing.key.password=android 2>&1 | tee build.log || {
-              echo "========== 构建失败，最后 150 行日志 =========="
-              tail -150 build.log
-              exit 1
-            }
+            -Pandroid.injected.signing.key.password=android > build.log 2>&1
+          GRADLE_EXIT=$?
+          echo "Gradle 退出码: $GRADLE_EXIT"
+          # 把关键错误行提升为 GitHub annotation（不登录也能通过 API 看到）
+          grep -nE "^e: |error:|FAILED|FAILURE:|What went wrong|> Task .*FAILED|Caused by:|Execution failed|ninja: error|clang.*error" build.log | head -40 | while IFS= read -r line; do
+            echo "::error::$line"
+          done
+          echo "========== 最后 80 行 =========="
+          tail -80 build.log
+          if [ $GRADLE_EXIT -ne 0 ]; then
+            echo "::error::Gradle 构建失败，退出码 $GRADLE_EXIT"
+            exit 1
+          fi
 
       - name: 确认 APK 大小
         run: |
