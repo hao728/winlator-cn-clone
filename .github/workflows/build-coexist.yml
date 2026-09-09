@@ -148,7 +148,10 @@ jobs:
           name: "Winlator 共存版 ${{ env.VERSION_NAME }} (${{ env.APP_ID }})"
           tag_name: "coexist-${{ env.VERSION_NAME }}-${{ github.run_number }}"
           draft: false
-          prerelease: true
+          # 自检全过无警告 → 正式版（自动 Latest）；有跳过项 → pre-release（需人工验证）
+          prerelease: ${{ env.SELF_CHECK_NEED_MANUAL == '1' }}
           body_path: RELEASE_NOTES.md
+          # 正式版自动设为 Latest，预发布版不覆盖 Latest
+          make_latest: ${{ env.SELF_CHECK_NEED_MANUAL == '0' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
