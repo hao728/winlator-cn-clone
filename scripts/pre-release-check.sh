@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # ============================================================
 # Winlator 共存版发布前静态自检脚本
-# 检查项：APK 存在 / 大小 / 签名 / 包名 / native 库 / assets
-# 任何一项失败则退出码非零，CI 不会发布 Release
+# 检查项：APK 存在 / 大小 / 签名 / 包名 / native 库 / assets / native大小
+# 致命错误 → exit 1 阻止发布
+# 警告（工具不可用导致跳过）→ 不阻止发布，但标记为需人工验证（pre-release）
+# 全部通过无警告 → 可自动设为 Latest 正式版
 # ============================================================
 set -euo pipefail
 
@@ -16,6 +18,7 @@ fi
 
 PASS=0
 FAIL=0
+WARNING=0
 
 check() {
   local desc="$1" result="$2"
@@ -27,6 +30,13 @@ check() {
     echo "::error::$desc"
     FAIL=$((FAIL+1))
   fi
+}
+
+warn() {
+  local desc="$1"
+  echo "⚠️  $desc"
+  echo "::warning::$desc"
+  WARNING=$((WARNING+1))
 }
 
 echo "============================================================"
@@ -70,7 +80,7 @@ if [ -n "$AAPT" ]; then
     check "包名错误 (期望 $EXPECTED_PKG，实际 ${PKG:-空})" 1
   fi
 else
-  echo "⚠️  未找到 aapt，跳过包名检查（不影响发布）"
+  warn "未找到 aapt，跳过包名检查（建议人工验证包名）"
 fi
 
 # --- 4. 签名验证 ---
@@ -81,7 +91,7 @@ if [ -n "$APKSIGNER" ]; then
     check "APK 签名无效" 1
   fi
 else
-  echo "⚠️  未找到 apksigner，跳过签名检查（不影响发布）"
+  warn "未找到 apksigner，跳过签名检查（建议人工验证签名）"
 fi
 
 # --- 5. native 库检查（5 个自有动态渲染器必须存在）---
@@ -134,11 +144,22 @@ fi
 # --- 汇总 ---
 echo ""
 echo "============================================================"
-echo "自检结果: $PASS 通过, $FAIL 失败"
+echo "自检结果: $PASS 通过, $FAIL 失败, $WARNING 警告(跳过项)"
 echo "============================================================"
 
 if [ "$FAIL" -gt 0 ]; then
   echo "::error::发布前自检失败 $FAIL 项，阻止发布（详见上方 ❌ 条目）"
   exit 1
 fi
-echo "✅ 全部自检通过，可以发布"
+
+# 输出是否需要人工验证到 GITHUB_ENV（供发布步骤判断 prerelease）
+if [ "$WARNING" -gt 0 ]; then
+  echo "SELF_CHECK_NEED_MANUAL=1" >> "${GITHUB_ENV:-/dev/null}"
+  echo ""
+  echo "⚠️  自检通过但有 $WARNING 项跳过，建议人工验证后设为 Latest"
+  echo "   发布将标记为 pre-release（预发布版）"
+else
+  echo "SELF_CHECK_NEED_MANUAL=0" >> "${GITHUB_ENV:-/dev/null}"
+  echo ""
+  echo "✅ 全部自检通过且无跳过项，可自动设为 Latest 正式版"
+fi
