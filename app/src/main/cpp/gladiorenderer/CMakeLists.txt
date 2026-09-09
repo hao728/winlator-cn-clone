@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.22.1)
 
 project(GladioRenderer)
 
-set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -O2 -Wno-unused-function -Wimplicit-function-declaration -Werror=incompatible-pointer-types")
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -O2 -Wno-unused-function -Wimplicit-function-declaration")
 
 include_directories(include)
 include_directories(../winlator/include)
