@@ -1,5 +1,7 @@
 package com.winlator.core;
 
+import com.winlator.BuildConfig;
+
 import android.app.Activity;
 import android.content.Context;
 import android.content.Intent;
@@ -44,7 +46,7 @@ import java.util.TimerTask;
 
 public abstract class AppUtils {
     public static final String DIRECTORY_DOWNLOADS = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS).getPath();
-    public static final String INTERNAL_STORAGE = "/data/data/com.winlator/storage";
+    public static final String INTERNAL_STORAGE = "/data/data/" + BuildConfig.APPLICATION_ID + "/storage";
     private static WeakReference<Toast> globalToastReference = null;
 
     public static class RestartApplicationOptions {
