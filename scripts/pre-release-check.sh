@@ -84,14 +84,14 @@ else
   echo "⚠️  未找到 apksigner，跳过签名检查（不影响发布）"
 fi
 
-# --- 5. native 库检查（6 个自有渲染器必须存在）---
+# --- 5. native 库检查（5 个自有动态渲染器必须存在）---
+# 注意：libadrenotools 是静态库(.a)，链接进 vortekrenderer.so，不单独出现在 APK 中
 REQUIRED_SO=(
   "lib/arm64-v8a/libwinlator.so"
   "lib/arm64-v8a/libgladiorenderer.so"
   "lib/arm64-v8a/libvortekrenderer.so"
   "lib/arm64-v8a/libvirglrenderer.so"
   "lib/arm64-v8a/libmidihandler.so"
-  "lib/arm64-v8a/libadrenotools.so"
 )
 MISSING_SO=()
 for so in "${REQUIRED_SO[@]}"; do
@@ -100,7 +100,7 @@ for so in "${REQUIRED_SO[@]}"; do
   fi
 done
 if [ ${#MISSING_SO[@]} -eq 0 ]; then
-  check "6 个自有 native 渲染器齐全" 0
+  check "5 个自有 native 渲染器齐全" 0
 else
   check "缺少 native 库: ${MISSING_SO[*]}" 1
 fi
