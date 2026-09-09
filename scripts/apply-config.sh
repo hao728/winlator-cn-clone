@@ -34,10 +34,8 @@ fi
 ORIG_VERSION_CODE=$(grep -E 'versionCode' "$BUILD_GRADLE" | head -1 | grep -oE '[0-9]+' || echo "32")
 ORIG_VERSION_NAME=$(grep -E 'versionName' "$BUILD_GRADLE" | head -1 | grep -oE '"[^"]+"' | tr -d '"' || echo "11.2.cn.03")
 
-# 如果是占位符，用默认值
-if [ "$ORIG_VERSION_CODE" = "__VERSION_CODE__" ]; then
-  ORIG_VERSION_CODE=32
-fi
+# 如果 versionName 是占位符（grep 能匹配到引号内的字符串），用默认值
+# versionCode 的占位符不含数字，grep -oE '[0-9]+' 会失败并走 || echo "32"，无需额外判断
 if [ "$ORIG_VERSION_NAME" = "__VERSION_NAME__" ]; then
   ORIG_VERSION_NAME="11.2.cn.03"
 fi
