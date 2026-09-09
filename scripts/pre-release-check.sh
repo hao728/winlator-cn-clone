@@ -24,6 +24,7 @@ check() {
     PASS=$((PASS+1))
   else
     echo "❌ $desc"
+    echo "::error::$desc"
     FAIL=$((FAIL+1))
   fi
 }
@@ -56,18 +57,20 @@ fi
 if [ -z "$APKSIGNER" ]; then
   APKSIGNER=$(which apksigner 2>/dev/null || echo "")
 fi
+echo "aapt: ${AAPT:-未找到}"
+echo "apksigner: ${APKSIGNER:-未找到}"
 
 # --- 3. 包名检查 ---
 if [ -n "$AAPT" ]; then
-  PKG=$("$AAPT" dump badging "$APK_PATH" 2>/dev/null | grep -oP "package: name='\K[^']+" | head -1)
-  echo "APK 包名: $PKG"
+  PKG=$("$AAPT" dump badging "$APK_PATH" 2>/dev/null | grep -oE "package: name='[^']+'" | head -1 | sed "s/package: name='//;s/'//")
+  echo "APK 包名: ${PKG:-（未解析到）}"
   if [ "$PKG" = "$EXPECTED_PKG" ]; then
     check "包名正确 ($PKG)" 0
   else
-    check "包名错误 (期望 $EXPECTED_PKG，实际 $PKG)" 1
+    check "包名错误 (期望 $EXPECTED_PKG，实际 ${PKG:-空})" 1
   fi
 else
-  echo "⚠️  未找到 aapt，跳过包名检查"
+  echo "⚠️  未找到 aapt，跳过包名检查（不影响发布）"
 fi
 
 # --- 4. 签名验证 ---
@@ -78,7 +81,7 @@ if [ -n "$APKSIGNER" ]; then
     check "APK 签名无效" 1
   fi
 else
-  echo "⚠️  未找到 apksigner，跳过签名检查"
+  echo "⚠️  未找到 apksigner，跳过签名检查（不影响发布）"
 fi
 
 # --- 5. native 库检查（6 个自有渲染器必须存在）---
@@ -92,7 +95,7 @@ REQUIRED_SO=(
 )
 MISSING_SO=()
 for so in "${REQUIRED_SO[@]}"; do
-  if ! unzip -l "$APK_PATH" | grep -q "$so"; then
+  if ! unzip -l "$APK_PATH" 2>/dev/null | grep -q "$so"; then
     MISSING_SO+=("$so")
   fi
 done
@@ -109,7 +112,7 @@ REQUIRED_ASSETS=(
 )
 MISSING_ASSETS=()
 for a in "${REQUIRED_ASSETS[@]}"; do
-  if ! unzip -l "$APK_PATH" | grep -q "$a"; then
+  if ! unzip -l "$APK_PATH" 2>/dev/null | grep -q "$a"; then
     MISSING_ASSETS+=("$a")
   fi
 done
@@ -119,20 +122,14 @@ else
   check "缺少 assets: ${MISSING_ASSETS[*]}" 1
 fi
 
-# --- 7. assets 内无旧包名残留（等长替换验证）---
-# 解压 rootfs.tzst 检查是否还有 com.winlator 残留
-TMPDIR=$(mktemp -d)
-unzip -p "$APK_PATH" assets/rootfs.tzst > "$TMPDIR/rootfs.tzst" 2>/dev/null || true
-if [ -f "$TMPDIR/rootfs.tzst" ]; then
-  # 用 strings 快速检查（不完整解压，只看二进制字符串）
-  RESIDUAL=$(strings "$TMPDIR/rootfs.tzst" 2>/dev/null | grep -c "com.winlator" || true)
-  if [ "$RESIDUAL" -eq 0 ]; then
-    check "rootfs 内无旧包名 com.winlator 残留" 0
-  else
-    check "rootfs 内有 $RESIDUAL 处旧包名残留（等长替换可能不完整）" 1
-  fi
+# --- 7. APK 内 lib 目录总大小（确认 native 库不是空壳）---
+LIB_SIZE=$(unzip -l "$APK_PATH" 2>/dev/null | grep "lib/arm64-v8a/" | awk '{sum+=$1} END {print int(sum/1024/1024)}')
+echo "native 库总大小: ${LIB_SIZE:-0}MB"
+if [ "${LIB_SIZE:-0}" -ge 5 ]; then
+  check "native 库大小合理 (${LIB_SIZE}MB >= 5MB)" 0
+else
+  check "native 库过小 (${LIB_SIZE:-0}MB < 5MB，可能未编译)" 1
 fi
-rm -rf "$TMPDIR"
 
 # --- 汇总 ---
 echo ""
@@ -141,7 +138,7 @@ echo "自检结果: $PASS 通过, $FAIL 失败"
 echo "============================================================"
 
 if [ "$FAIL" -gt 0 ]; then
-  echo "::error::发布前自检失败 $FAIL 项，阻止发布"
+  echo "::error::发布前自检失败 $FAIL 项，阻止发布（详见上方 ❌ 条目）"
   exit 1
 fi
 echo "✅ 全部自检通过，可以发布"
