@@ -320,9 +320,14 @@ public class ExternalController implements GamepadSlot {
             InputDevice device = event.getDevice();
             InputDevice.MotionRange range = device.getMotionRange(axis, event.getSource());
             if (range != null) {
-                float flat = range.getFlat();
                 float value = historyPos < 0 ? event.getAxisValue(axis) : event.getHistoricalAxisValue(axis, historyPos);
-                if (Math.abs(value) > flat) return value;
+                // 摇杆轴统一用 STICK_DEAD_ZONE 做回中死区,与 dpad 门控阈值一致,
+                // 避免轻微数值残留造成摇杆与方向键在边界上判定不一致
+                if (axis == MotionEvent.AXIS_X || axis == MotionEvent.AXIS_Y
+                        || axis == MotionEvent.AXIS_Z || axis == MotionEvent.AXIS_RZ) {
+                    if (Math.abs(value) >= ControlElement.STICK_DEAD_ZONE) return value;
+                }
+                else if (Math.abs(value) > range.getFlat()) return value;
             }
         }
         return 0;

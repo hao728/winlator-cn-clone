@@ -138,9 +138,17 @@ public class Texture {
     }
 
     public void copyFromReadBuffer(short width, short height) {
+        copyFromReadBuffer(width, height, GLES20.GL_RGBA);
+    }
+
+    public void copyFromReadBuffer(short width, short height, int internalformat) {
         if (!isAllocated()) allocateTexture(width, height, null);
         GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, textureId);
-        GLES20.glCopyTexImage2D(GLES20.GL_TEXTURE_2D, 0, GLES20.GL_RGBA, 0, 0, width, height, 0);
+        // internalformat 由调用方决定：gladio（GLX）窗口是不透明视觉（X server 只暴露
+        // RGB24 fbconfig），但 wined3d/ddraw 客户端写 back buffer 时 alpha 通道未定义
+        //（PvZ 等填 0），用 GL_RGB 采样 alpha 恒为 1，避免合成器按 GL_SRC_ALPHA 把
+        // 整个窗口混成全透明；VirGL 前端 alpha 有意义，保持 GL_RGBA。
+        GLES20.glCopyTexImage2D(GLES20.GL_TEXTURE_2D, 0, internalformat, 0, 0, width, height, 0);
         GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, 0);
         GLES20.glFlush();
     }

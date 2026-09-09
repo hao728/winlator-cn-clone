@@ -31,8 +31,10 @@ typedef struct GLContext {
 
     GLuint savedDSATarget;
     GLuint savedDSAId;
+    GLuint savedDSAId2;
 
     int currentWindowId;
+    uint64_t lastPresentNs;
 } GLContext;
 
 extern GLContext* createGLContext(JNIEnv* env, jobject obj, int clientFd);

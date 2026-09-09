@@ -15,7 +15,6 @@ static void loadJMethods(JMethods* jmethods) {
 
     jclass cls = (*env)->GetObjectClass(env, jmethods->obj);
     jmethods->getWindowSize = (*env)->GetMethodID(env, cls, "getWindowSize", "(I)[S");
-    jmethods->clearWindowContent = (*env)->GetMethodID(env, cls, "clearWindowContent", "(I)V");
     jmethods->updateWindowContent = (*env)->GetMethodID(env, cls, "updateWindowContent", "(ISSZ)Z");
     jmethods->getGLXContextPtr = (*env)->GetMethodID(env, cls, "getGLXContextPtr", "(II)J");
 }
@@ -29,16 +28,34 @@ static void getWindowSize(JMethods* jmethods, int windowId, short* outWidth, sho
 }
 
 static void createDisplayBuffer(GLContext* context) {
+    // 保存客户端绑定状态：下面的 bind(GL_FRAMEBUFFER, 0) 会 ARRAYS_FILL 把三槽
+    // 覆盖成 0（=默认帧缓冲），随后必须按入口值恢复 READ 槽与 slot0，否则在
+    // FAILED 重建路径上客户端缓存指向自己的 FBO/0、不会重绑，READ 槽一旦被污染，
+    // present 的 blit 就再次成为同 FBO 重叠拷贝被 GLES 拒绝（黑屏）。
+    // 注：DRAW 槽无需恢复——调用方随后必然经 GLRenderer_setDrawBuffer(GL_BACK)
+    // 把 DRAW 绑回默认缓冲。入口槽值只会是 0 或客户端自己的 FBO id（槽里从不存
+    // displayBuffer 私有 id），恢复不会触发僵尸 entry 复活。
+    GLuint saved[MAX_FRAMEBUFFER_TARGETS];
+    memcpy(saved, currentRenderer->clientState.framebuffer, sizeof(saved));
+
     currentRenderer->displayBuffer = GLFramebuffer_create();
-    GLFramebuffer_bind(GL_FRAMEBUFFER, currentRenderer->displayBuffer);
+    GLFramebuffer_bind(GL_FRAMEBUFFER, 0);  // 0→displayBuffer 映射在真实层完成，槽记 0
     GLFramebuffer_setAttachment(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, context->displayBufAttachment.texture, 0);
     GLFramebuffer_setAttachment(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER, context->displayBufAttachment.renderbuffer, 0);
+
+    GLFramebuffer_bind(GL_READ_FRAMEBUFFER, saved[indexOfGLTarget(GL_READ_FRAMEBUFFER)]);
+    currentRenderer->clientState.framebuffer[0] = saved[0];
 }
 
 static void destroyDisplayBuffer() {
     if (currentRenderer && currentRenderer->displayBuffer > 0) {
-        GLFramebuffer_delete(currentRenderer->displayBuffer);
+        // 先清零再 delete：GLFramebuffer_delete 会把被删对象所在的槽重绑为 0，若此刻
+        // displayBuffer 仍是旧值，bind 的 0→displayBuffer 映射会自指已删 FBO，槽位记录
+        // 悬垂（swap 失败重建路径 resize/转屏可触发）。先清零则重绑记录为 0，之后
+        // bind(0) 经映射自然指向新 displayBuffer，"默认帧缓冲"语义无缝迁移。
+        GLuint framebuffer = currentRenderer->displayBuffer;
         currentRenderer->displayBuffer = 0;
+        GLFramebuffer_delete(framebuffer);
     }
 }
 
@@ -47,6 +64,12 @@ static void createDisplayBufAttachment(GLContext* context) {
     short height = currentRenderer->displaySize[1];
 
     if (context->displayBufAttachment.texture == 0) {
+        // 必须用驱动 glGenTextures 分配（与下方 renderbuffer 的 glGenRenderbuffers
+        // 同一分配器）：客户端纹理句柄走 gladio 计数器、真实纹理名由 createNamedTexture
+        // 内部另行 glGenTextures，两套都是虚拟映射；若把 GLTexture_create 的计数器
+        // 句柄直接当真实纹理名 glBindTexture，会隐式创建小号真实对象，与 Java 合成器
+        // （同一驱动分配器）的壁纸/UI 纹理撞成同一对象——displayBuffer 内容会直接
+        // 写进壁纸纹理（壁纸黑且不可恢复）。
         glGenTextures(1, &context->displayBufAttachment.texture);
         glBindTexture(GL_TEXTURE_2D, context->displayBufAttachment.texture);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
@@ -93,21 +116,43 @@ static void setCurrentRenderWindow(GLContext* context, int windowId) {
     // 否则每次 MakeCurrent 都会销毁窗口纹理，使窗口化下出现黑屏。
     if (currentRenderer->displayBuffer > 0 && !resized) return;
 
-    // 注意：这里不能调用 clearWindowContent。窗口化 ddraw 游戏的 present 走
-    // wined3d 的 GDI 路径（不经过 glXSwapBuffers），窗口内容靠 X11 2D 绘图更新
-    // drawable 的 CPU data；clearWindowContent 会把 data 置空，永久摧毁该窗口
-    // 的 2D 显示路径导致黑屏。GL 接管窗口由 Java 端 updateWindowContent 在首次
-    // 成功拷贝时自行 setData(null) 完成，无需在此提前清除。
+    // 注意：这里不能清空窗口内容（Java 侧已移除 clearWindowContent）。窗口化 ddraw
+    // 游戏的 present 走 wined3d 的 GDI 路径（不经过 glXSwapBuffers），窗口内容靠
+    // X11 2D 绘图更新 drawable 的 CPU data；清空 data 会永久摧毁该窗口的 2D 显示
+    // 路径导致黑屏。GL 接管窗口由 Java 端 updateWindowContent 在首次成功拷贝时
+    // 自行 setData(null) 完成，无需在此提前清除。
 
     currentRenderer->displaySize[0] = width;
     currentRenderer->displaySize[1] = height;
 
-    destroyDisplayBuffer();
-    destroyDisplayBufAttachment(context);
-    createDisplayBufAttachment(context);
-    createDisplayBuffer(context);
+    if (currentRenderer->displayBuffer == 0) {
+        destroyDisplayBufAttachment(context);
+        createDisplayBufAttachment(context);
+        createDisplayBuffer(context);
+    }
+    else {
+        // 尺寸变化只换 attachment、保持 displayBuffer FBO 恒定，并且【绝不能】
+        // 清空 clientState.framebuffer：客户端(wined3d)有自己的状态缓存，gladio 侧
+        // 缓存被清成 0（bind 时 0 会映射成 displayBuffer）而客户端以为仍绑着 back
+        // buffer 不再重绑，会使 present 的 glBlitFramebuffer 源与目标同为
+        // displayBuffer（同 FBO 重叠拷贝），被 GLES 以 GL_INVALID_OPERATION 拒绝，
+        // 画面恒黑。重建 FBO 本体同样危险：旧 id 被删后客户端缓存仍指向它。
+        destroyDisplayBufAttachment(context);
+        createDisplayBufAttachment(context);
 
-    ARRAYS_FILL(currentRenderer->clientState.framebuffer, MAX_FRAMEBUFFER_TARGETS, 0);
+        GLuint savedFB0 = currentRenderer->clientState.framebuffer[0];
+        GLuint savedReadFB = currentRenderer->clientState.framebuffer[indexOfGLTarget(GL_READ_FRAMEBUFFER)];
+        GLFramebuffer_bind(GL_FRAMEBUFFER, 0);
+        GLFramebuffer_setAttachment(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, context->displayBufAttachment.texture, 0);
+        GLFramebuffer_setAttachment(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER, context->displayBufAttachment.renderbuffer, 0);
+        // DRAW 槽无需恢复：随后 GLRenderer_setDrawBuffer(GL_BACK) 必然把 DRAW 绑回
+        // 默认缓冲。READ 槽必须恢复。
+        GLFramebuffer_bind(GL_READ_FRAMEBUFFER, savedReadFB);
+        // 合并槽不通过 bind 恢复（会 ARRAYS_FILL 波及 DRAW 槽），直接写回缓存值，
+        // 保持与客户端"最后一次 GL_FRAMEBUFFER 绑定"的记录一致。
+        currentRenderer->clientState.framebuffer[0] = savedFB0;
+    }
+
     GLRenderer_setDrawBuffer(currentRenderer, GL_BACK);
 
     GLTexture* texture = GLTexture_getBound(GL_TEXTURE_2D);
@@ -118,19 +163,25 @@ static void setCurrentRenderWindow(GLContext* context, int windowId) {
 }
 
 static void swapDisplayBuffers(GLContext* context, int drawableId) {
-    GLuint framebuffer = currentRenderer->clientState.framebuffer[indexOfGLTarget(GL_FRAMEBUFFER)];
     GLuint drawFramebuffer = currentRenderer->clientState.framebuffer[indexOfGLTarget(GL_DRAW_FRAMEBUFFER)];
     GLuint readFramebuffer = currentRenderer->clientState.framebuffer[indexOfGLTarget(GL_READ_FRAMEBUFFER)];
-    if (framebuffer != drawFramebuffer) GLFramebuffer_bind(GL_FRAMEBUFFER, drawFramebuffer);
+
+    // 只同步 DRAW 槽，【绝不】用 bind(GL_FRAMEBUFFER)：其内部 ARRAYS_FILL 会把
+    // READ 槽一并覆盖成 DRAW 的值（present 时即 0/默认缓冲）。客户端(wined3d)
+    // 的状态缓存认为 READ 仍是自己的 back buffer、不会重绑，之后 present 的
+    // glBlitFramebuffer 源与目标同为 displayBuffer（同 FBO 重叠拷贝），被 GLES
+    // 以 GL_INVALID_OPERATION 拒绝 → 画面恒黑（桌面窗口同理）。
+    // 槽值==0 表示客户端 DRAW 目标正是默认缓冲（真实层已绑 displayBuffer），无需动作。
+    if (drawFramebuffer != 0)
+        GLFramebuffer_bind(GL_DRAW_FRAMEBUFFER, drawFramebuffer);
 
     // glXSwapBuffers 提交的是默认帧缓冲，而 Java 端 updateWindowContent 内部用
     // glCopyTexImage2D 从"当前 GL_READ_FRAMEBUFFER"读取像素。客户端(wined3d 等)在
     // present 时往往把 GL_READ_FRAMEBUFFER 留在自己的离屏 back buffer FBO 上，
     // 那份内容是 top-down 的且尺寸不一定等于窗口，会造成全屏画面上下颠倒、窗口化黑屏。
-    // 因此这里强制把读源切到 displayBuffer，拷贝完成后再恢复客户端原来的读绑定。
-    GLuint displayBuffer = currentRenderer->displayBuffer;
-    bool readSourceOverridden = displayBuffer > 0 && readFramebuffer != displayBuffer;
-    if (readSourceOverridden) GLFramebuffer_bind(GL_READ_FRAMEBUFFER, displayBuffer);
+    // 因此这里强制把读源切到默认缓冲（0→displayBuffer），拷贝完成后再恢复客户端
+    // 原来的读绑定。
+    if (readFramebuffer != 0) GLFramebuffer_bind(GL_READ_FRAMEBUFFER, 0);
 
     JMethods* jmethods = &context->jmethods;
     bool result = (*jmethods->env)->CallBooleanMethod(jmethods->env, jmethods->obj, jmethods->updateWindowContent, drawableId, currentRenderer->displaySize[0], currentRenderer->displaySize[1], JNI_TRUE);
@@ -147,31 +198,37 @@ static void swapDisplayBuffers(GLContext* context, int drawableId) {
 
         GLTexture* texture = GLTexture_getBound(GL_TEXTURE_2D);
         glBindTexture(GL_TEXTURE_2D, texture ? texture->id : 0);
-        if (readSourceOverridden) GLFramebuffer_bind(GL_READ_FRAMEBUFFER, readFramebuffer);
     }
     else {
         destroyDisplayBuffer();
         destroyDisplayBufAttachment(context);
         setCurrentRenderWindow(context, drawableId);
     }
+
+    // 出口自愈：任何内部路径（含 FAILED 重建）若把 READ 槽改成了非入口值，
+    // 一律恢复为客户端入口时的绑定，保证与客户端(wined3d)的状态缓存一致。
+    if (currentRenderer->clientState.framebuffer[indexOfGLTarget(GL_READ_FRAMEBUFFER)] != readFramebuffer)
+        GLFramebuffer_bind(GL_READ_FRAMEBUFFER, readFramebuffer);
 }
 
 // ddraw 等客户端在窗口模式下会把 primary(front buffer) 当作绘制目标（wined3d 用
 // glBlitFramebuffer 拷到 FBO 0 再 glFlush），并且从不调用 glXSwapBuffers。
 // 真实 X11 语义下 front buffer 是即画即显的，这里在 flush/blit 边界补上这一步：
-// 若当前 draw framebuffer 正是 displayBuffer，就把内容推送给窗口合成器。
+// 若当前 draw framebuffer 正是默认帧缓冲（槽记 0，真实层即 displayBuffer），
+// 就把内容推送给窗口合成器。
 void gd_presentIfFrontBufferBound(GLContext* context) {
     if (!currentRenderer || currentRenderer->displayBuffer == 0 || context->currentWindowId == 0) return;
 
     GLuint drawFramebuffer = currentRenderer->clientState.framebuffer[indexOfGLTarget(GL_DRAW_FRAMEBUFFER)];
-    if (drawFramebuffer != currentRenderer->displayBuffer) return;
+    if (drawFramebuffer != 0) return;
 
-    static uint64_t lastPresentNs = 0;
+    // 节流时间戳挂在 GLContext 上而非函数级 static：static 跨线程共享，多 GL 线程
+    // （wined3d CS 线程 + GDI/ddraw 线程）会互抢 6ms 窗口丢帧，且非原子读写是数据竞争。
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     uint64_t nowNs = (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
-    if (lastPresentNs != 0 && nowNs - lastPresentNs < 6000000ull) return;
-    lastPresentNs = nowNs;
+    if (context->lastPresentNs != 0 && nowNs - context->lastPresentNs < 6000000ull) return;
+    context->lastPresentNs = nowNs;
 
     swapDisplayBuffers(context, context->currentWindowId);
 }

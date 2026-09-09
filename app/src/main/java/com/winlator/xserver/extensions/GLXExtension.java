@@ -3,6 +3,7 @@ package com.winlator.xserver.extensions;
 import static com.winlator.xserver.XClientRequestHandler.RESPONSE_CODE_ERROR;
 import static com.winlator.xserver.XClientRequestHandler.RESPONSE_CODE_SUCCESS;
 
+import android.opengl.GLES20;
 import android.util.SparseArray;
 import android.util.SparseLongArray;
 
@@ -318,18 +319,6 @@ public class GLXExtension extends Extension {
     }
 
     @Keep
-    private void clearWindowContent(int windowId) {
-        Window window = xServer.windowManager.getWindow(windowId);
-        if (window != null) {
-            Drawable drawable = window.getContent();
-            if (drawable.getData() != null) {
-                drawable.setData(null);
-                drawable.getTexture().destroy();
-            }
-        }
-    }
-
-    @Keep
     private boolean updateWindowContent(int drawableId, short width, short height, boolean flipY) {
         Drawable drawable = xServer.drawableManager.getDrawable(drawableId);
         if (drawable == null) return true;
@@ -340,7 +329,9 @@ public class GLXExtension extends Extension {
             drawable.setData(null);
             Texture texture = drawable.getTexture();
             texture.setFlipY(flipY);
-            texture.copyFromReadBuffer(width, height);
+            // GL_RGB：GLX/gladio 窗口是不透明视觉，但 ddraw 客户端写 back buffer 时
+            // alpha 未定义（常填 0），按 GL_RGBA 拷贝会让合成器把窗口混成全透明。
+            texture.copyFromReadBuffer(width, height, GLES20.GL_RGB);
             Runnable onDrawListener = drawable.getOnDrawListener();
             if (onDrawListener != null) onDrawListener.run();
         }

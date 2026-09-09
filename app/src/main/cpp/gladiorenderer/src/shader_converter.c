@@ -1350,6 +1350,12 @@ static void injectBuiltinVariables(ShaderProgram* program, ShaderObject* shader)
         insertCodeLine(shader, head++, strdup("precision highp int;"));
         insertCodeLine(shader, head++, strdup("precision highp sampler2DShadow;"));
         insertCodeLine(shader, head++, strdup("precision highp sampler3D;"));
+        // GLES3 没有 1D 纹理/texture1D：客户端 glTexImage1D 在 gl_calls.c 被包装成
+        // height=1 的 glTexImage2D 上传，故桌面 GLSL 的 1D 采样（如调色板索引查找
+        // texture1D(tex, idx)）应映射为对同一 2D 纹理中心行（唯一有效行）的采样。
+        // 缺失时客户端 shader 编译失败、program 失效，走该 program 的绘制静默消失
+        // （MUGEN 半数 shader 依赖此宏）。
+        insertCodeLine(shader, head++, strdup("#define texture1D(tex, x) texture(tex, vec2(x, 0.5))"));
     }
 
     const char* prefix = shader->type == GL_VERTEX_SHADER ? "out" : "in";
@@ -1930,8 +1936,15 @@ void ShaderConverter_updateBoundProgram() {
             }
 
             if (program->location.modelViewProjectionMatrix != -1) {
+                // MVP = P × MV（列向量 clip = P·(MV·v)，OpenGL 规范定义
+                // gl_ModelViewProjectionMatrix 即投影×模型视图）。全库约定是列主序、
+                // 变换右乘（glOrtho/glTranslate 等新变换乘在右边），mat4_multiply(r,a,b)
+                // 即 r = a×b——由 mat4_translate 的平移列公式（result[12] = m00·x +
+                // m04·y + m08·z + m12）可反证，这正是 M×T 的平移。原实现按 MV×P 计算：
+                // 瓦片平移（像素量级）乘反后不被投影归一，NDC 巨大 → 图元全被裁剪、
+                // 绘制零片元（clear 不经光栅化照常工作，把问题掩盖成"状态正常却黑屏"）。
                 float matrix[16];
-                mat4_multiply(matrix, GLRenderer_getMatrixFromStack(currentRenderer, MODEL_VIEW_MATRIX_INDEX), GLRenderer_getMatrixFromStack(currentRenderer, PROJECTION_MATRIX_INDEX));
+                mat4_multiply(matrix, GLRenderer_getMatrixFromStack(currentRenderer, PROJECTION_MATRIX_INDEX), GLRenderer_getMatrixFromStack(currentRenderer, MODEL_VIEW_MATRIX_INDEX));
                 glUniformMatrix4fv(program->location.modelViewProjectionMatrix, 1, GL_FALSE, matrix);
             }
 

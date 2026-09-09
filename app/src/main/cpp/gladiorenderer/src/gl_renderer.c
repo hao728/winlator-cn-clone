@@ -1270,7 +1270,13 @@ void* GLRenderer_getTexImage(GLRenderer* renderer, GLenum target, GLint level, G
     void* pixels = malloc(*imageSize);
     GLRenderer_readPixels(renderer, 0, 0, texture->width, texture->height, format, type, pixels);
 
-    glBindFramebuffer(GL_FRAMEBUFFER, renderer->clientState.framebuffer[indexOfGLTarget(GL_FRAMEBUFFER)]);
+    // 分别按 DRAW/READ 槽恢复真实绑定。不能按 slot0（GL_FRAMEBUFFER 合并槽）裸
+    // glBindFramebuffer 恢复：slot0 只是"客户端最后一次合并绑定"的缓存记录，与
+    // DRAW/READ 各自的绑定可能不一致，按它恢复会把真实绑定点拉偏且 gladio 缓存
+    // 不知情（这是真实绑定漂移的根源之一）。经 GLFramebuffer_bind 恢复可正确处理
+    // 0→displayBuffer 映射并保持缓存与真实层一致（调用方处于无锁上下文，安全）。
+    GLFramebuffer_bind(GL_DRAW_FRAMEBUFFER, renderer->clientState.framebuffer[indexOfGLTarget(GL_DRAW_FRAMEBUFFER)]);
+    GLFramebuffer_bind(GL_READ_FRAMEBUFFER, renderer->clientState.framebuffer[indexOfGLTarget(GL_READ_FRAMEBUFFER)]);
     glDeleteFramebuffers(1, &framebuffer);
     return pixels;
 }
@@ -1294,8 +1300,16 @@ void GLRenderer_setDrawBuffer(GLRenderer* renderer, GLenum drawBuffer) {
     if (drawBuffer == GL_NONE || (drawBuffer >= GL_COLOR_ATTACHMENT0 && drawBuffer <= GL_COLOR_ATTACHMENT31)) {
         GLFramebuffer_setDrawBuffers(1, &drawBuffer);
     }
-    else if (renderer->displayBuffer != renderer->clientState.framebuffer[indexOfGLTarget(GL_FRAMEBUFFER)]) {
-        GLFramebuffer_bind(GL_FRAMEBUFFER, renderer->displayBuffer);
+    else if (renderer->clientState.framebuffer[indexOfGLTarget(GL_DRAW_FRAMEBUFFER)] != 0) {
+        // GL_BACK=默认帧缓冲的后缓冲 → 把 DRAW 切回默认缓冲。槽值==0 表示客户端
+        // 已认为 DRAW=默认缓冲（真实层即 displayBuffer），无需动作；否则经 bind(0)
+        // 切回——0→displayBuffer 的映射在 bind 内部完成，槽位记 0，与客户端状态
+        // 缓存一致（存 displayBuffer 私有 id 会在它重建/删除后留下悬垂记录）。
+        // 这里绝不能用 bind(GL_FRAMEBUFFER)（其 ARRAYS_FILL 会把客户端刚绑好的
+        // READ 槽一并覆盖成 0，客户端状态缓存不知情、不再重绑，
+        // 之后 present 的 glBlitFramebuffer 源与目标同为 displayBuffer（同 FBO
+        // 重叠拷贝）被 GLES 以 GL_INVALID_OPERATION 拒绝 → 游戏与桌面画面恒黑）。
+        GLFramebuffer_bind(GL_DRAW_FRAMEBUFFER, 0);
     }
 }
 
