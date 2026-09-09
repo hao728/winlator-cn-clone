@@ -41,11 +41,11 @@ jobs:
             echo "上游有新提交，开始合并。"
           fi
 
-      - name: 合并上游（冲突时保留我们的改动）
+      - name: 合并上游（冲突时保留我们的共存改动）
         if: steps.check.outputs.up_to_date == 'false'
         run: |
           git checkout main
-          # 合并上游；冲突文件保留我们的版本(--ours)，因为我们的改动是把硬编码改动态，兼容性好
+          # 合并上游；冲突文件保留我们的版本(--ours)，因为我们的改动是把硬编码改动态
           git merge upstream/main --no-edit -X ours || {
             echo "=== merge 产生冲突，对所有冲突文件保留我们的版本 ==="
             git diff --name-only --diff-filter=U | while read f; do
@@ -54,9 +54,46 @@ jobs:
             done
             git -c core.editor=true merge --continue
           }
-          git log --oneline -3
-          git push origin main
+          git log --oneline -5
 
-      - name: 无更新时也手动触发一次构建（可选，确保 artifact 不过期）
+      - name: 检测上游是否更新了我们改过的文件
+        if: steps.check.outputs.up_to_date == 'false'
+        id: conflict-check
+        run: |
+          # 我们为共存改过的文件列表
+          COEXIST_FILES=(
+            "app/build.gradle"
+            "app/src/main/AndroidManifest.xml"
+            "gradle.properties"
+            "app/src/main/java/com/winlator/container/Container.java"
+            "app/src/main/java/com/winlator/core/AppUtils.java"
+            "app/src/main/java/com/winlator/core/FileUtils.java"
+            "app/src/main/java/com/winlator/widget/EnvVarsView.java"
+            "app/src/main/java/com/winlator/winhandler/WinHandler.java"
+            "app/src/main/cpp/gladiorenderer/CMakeLists.txt"
+          )
+          # 找出上游本次更新中触及的共存文件
+          CHANGED=$(git diff --name-only HEAD~1 HEAD 2>/dev/null || true)
+          OVERLAP=""
+          for f in "${COEXIST_FILES[@]}"; do
+            if echo "$CHANGED" | grep -q "^${f}$"; then
+              OVERLAP="${OVERLAP}- ${f}\n"
+            fi
+          done
+          if [ -n "$OVERLAP" ]; then
+            echo "has_overlap=true" >> $GITHUB_OUTPUT
+            echo -e "$OVERLAP" > upstream_overlap.txt
+            echo "::warning::上游更新了共存改动文件，合并时保留了我们的版本，上游这些文件的更新可能被覆盖，需人工核对"
+            echo -e "上游更新了以下共存改动文件（合并时保留了我们的版本，上游更新可能被覆盖）:\n$OVERLAP"
+          else
+            echo "has_overlap=false" >> $GITHUB_OUTPUT
+            echo "上游未触及共存改动文件，所有更新完整合入"
+          fi
+
+      - name: 推送合并结果
+        if: steps.check.outputs.up_to_date == 'false'
+        run: git push origin main
+
+      - name: 无更新时提示
         if: steps.check.outputs.up_to_date == 'true'
         run: echo "上游已是最新，本次不重复构建。"

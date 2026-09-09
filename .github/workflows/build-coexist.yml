@@ -11,6 +11,9 @@ env:
   JAVA_VERSION: '17'
   NDK_VERSION: '24.0.8215888'
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -19,26 +22,36 @@ jobs:
         uses: actions/checkout@v4
         with:
           lfs: false
-          fetch-depth: 1
+          fetch-depth: 0   # 需要完整历史生成 changelog
 
-      - name: 安装 zstandard
-        run: pip install zstandard
+      - name: 安装依赖
+        run: |
+          pip install zstandard
+          sudo apt-get update -qq && sudo apt-get install -y -qq aapt apksigner unzip 2>/dev/null || true
 
-      - name: 对 assets 做等长包名替换（核心步骤）
-        run: python3 scripts/patch-assets.py
+      - name: 读取共存配置
+        id: config
+        run: |
+          chmod +x scripts/apply-config.sh
+          bash scripts/apply-config.sh coexist.properties app/build.gradle
+
+      - name: 对 assets 做等长包名替换
+        run: |
+          python3 scripts/patch-assets.py --config coexist.properties --assets-dir app/src/main/assets
 
       - name: 诊断：确认 assets 未丢失
         run: |
           echo "=== assets 目录大小 ==="
           du -sh app/src/main/assets/
-          echo "=== rootfs.tzst 大小（应约 90MB+）==="
+          echo "=== rootfs.tzst ==="
           ls -lh app/src/main/assets/rootfs.tzst
+          echo "=== build.gradle 关键行 ==="
+          grep -E "applicationId|versionCode|versionName" app/build.gradle
 
-      - name: 校验 gradle.properties（防止属性粘连）
+      - name: 校验 gradle.properties
         run: |
-          # 内存配置已直接写在仓库 gradle.properties 中；这里只校验每行都是合法 key=value
           cat gradle.properties
-          grep -nE 'falseorg|trueorg|falsetrue' gradle.properties && { echo "::error::gradle.properties 出现属性粘连"; exit 1; } || true
+          grep -nE 'falseorg|trueorg|falsetrue' gradle.properties && { echo "::error::gradle.properties 属性粘连"; exit 1; } || true
 
       - name: Set up JDK
         uses: actions/setup-java@v4
@@ -53,26 +66,40 @@ jobs:
       - name: 安装 NDK 和 CMake
         run: sdkmanager --install "ndk;${{ env.NDK_VERSION }}" "cmake;3.22.1"
 
-      - name: 创建签名 keystore
+      - name: 准备签名 keystore
+        id: keystore
         run: |
-          keytool -genkey -v -keystore debug.keystore \
-            -alias androiddebugkey \
-            -keyalg RSA -keysize 2048 -validity 10000 \
-            -storepass android -keypass android \
-            -dname "CN=Debug, OU=Debug, O=Debug, L=Debug, ST=Debug, C=US"
+          if [ -n "${{ secrets.KEYSTORE_BASE64 }}" ]; then
+            echo "使用自定义签名"
+            echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > custom.keystore
+            echo "keystore_path=$PWD/custom.keystore" >> $GITHUB_OUTPUT
+            echo "keystore_pass=${{ secrets.KEYSTORE_PASSWORD }}" >> $GITHUB_OUTPUT
+            echo "key_alias=${{ secrets.KEY_ALIAS }}" >> $GITHUB_OUTPUT
+            echo "key_pass=${{ secrets.KEY_PASSWORD }}" >> $GITHUB_OUTPUT
+          else
+            echo "使用 debug 签名"
+            keytool -genkey -v -keystore debug.keystore \
+              -alias androiddebugkey \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -storepass android -keypass android \
+              -dname "CN=Debug, OU=Debug, O=Debug, L=Debug, ST=Debug, C=US"
+            echo "keystore_path=$PWD/debug.keystore" >> $GITHUB_OUTPUT
+            echo "keystore_pass=android" >> $GITHUB_OUTPUT
+            echo "key_alias=androiddebugkey" >> $GITHUB_OUTPUT
+            echo "key_pass=android" >> $GITHUB_OUTPUT
+          fi
 
       - name: 构建 Release APK
         run: |
           chmod +x gradlew
           set +e
           ./gradlew assembleRelease --no-daemon --stacktrace \
-            -Pandroid.injected.signing.store.file=$PWD/debug.keystore \
-            -Pandroid.injected.signing.store.password=android \
-            -Pandroid.injected.signing.key.alias=androiddebugkey \
-            -Pandroid.injected.signing.key.password=android > build.log 2>&1
+            -Pandroid.injected.signing.store.file=${{ steps.keystore.outputs.keystore_path }} \
+            -Pandroid.injected.signing.store.password=${{ steps.keystore.outputs.keystore_pass }} \
+            -Pandroid.injected.signing.key.alias=${{ steps.keystore.outputs.key_alias }} \
+            -Pandroid.injected.signing.key.password=${{ steps.keystore.outputs.key_pass }} > build.log 2>&1
           GRADLE_EXIT=$?
           echo "Gradle 退出码: $GRADLE_EXIT"
-          # 把关键错误行提升为 GitHub annotation（不登录也能通过 API 看到）
           grep -nE "^e: |error:|FAILED|FAILURE:|What went wrong|> Task .*FAILED|Caused by:|Execution failed|ninja: error|clang.*error" build.log | head -40 | while IFS= read -r line; do
             echo "::error::$line"
           done
@@ -83,21 +110,45 @@ jobs:
             exit 1
           fi
 
-      - name: 确认 APK 大小
+      - name: 确认 APK
         run: |
           ls -lh app/build/outputs/apk/release/
-          echo "APK 应约 150-200MB（含 assets），如果只有几 MB 说明 assets 丢失"
+          APK=$(ls app/build/outputs/apk/release/*.apk | head -1)
+          echo "APK_PATH=$APK" >> $GITHUB_ENV
 
       - name: 重命名 APK
         run: |
           SHA=$(git rev-parse --short HEAD)
           TS=$(date +%Y%m%d-%H%M%S)
-          mv app/build/outputs/apk/release/app-release.apk "Winlator-coexist-${SHA}-${TS}.apk"
+          mv "$APK_PATH" "Winlator-coexist-${SHA}-${TS}.apk"
           ls -lh *.apk
+          echo "APK_FINAL=$(ls *.apk | head -1)" >> $GITHUB_ENV
 
-      - name: 上传 APK
+      - name: 发布前静态自检
+        run: |
+          chmod +x scripts/pre-release-check.sh
+          bash scripts/pre-release-check.sh "$APK_FINAL" "${{ env.APP_ID }}"
+
+      - name: 生成更新日志
+        run: |
+          chmod +x scripts/generate-changelog.sh
+          bash scripts/generate-changelog.sh RELEASE_NOTES.md "${{ env.APP_ID }}"
+
+      - name: 上传 APK（artifact）
         uses: actions/upload-artifact@v4
         with:
           name: winlator-coexist-apk
           path: "*.apk"
           retention-days: 30
+
+      - name: 发布 Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: "*.apk"
+          name: "Winlator 共存版 ${{ env.VERSION_NAME }} (${{ env.APP_ID }})"
+          tag_name: "coexist-${{ env.VERSION_NAME }}-${{ github.run_number }}"
+          draft: false
+          prerelease: true
+          body_path: RELEASE_NOTES.md
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
