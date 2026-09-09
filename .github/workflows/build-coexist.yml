@@ -34,10 +34,11 @@ jobs:
           echo "=== rootfs.tzst 大小（应约 90MB+）==="
           ls -lh app/src/main/assets/rootfs.tzst
 
-      - name: 加大 Gradle 内存
+      - name: 校验 gradle.properties（防止属性粘连）
         run: |
-          echo "org.gradle.jvmargs=-Xmx4g -XX:MaxMetaspaceSize=1g" >> gradle.properties
-          echo "org.gradle.parallel=true" >> gradle.properties
+          # 内存配置已直接写在仓库 gradle.properties 中；这里只校验每行都是合法 key=value
+          cat gradle.properties
+          grep -nE 'falseorg|trueorg|falsetrue' gradle.properties && { echo "::error::gradle.properties 出现属性粘连"; exit 1; } || true
 
       - name: Set up JDK
         uses: actions/setup-java@v4
