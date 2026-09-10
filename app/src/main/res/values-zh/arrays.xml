@@ -159,4 +159,14 @@
         <item>CP2 （跟手RA2）</item>
         <item>V3(暗黑)</item>
     </string-array>
+    <string-array name="winfg_perf_preset_entries">
+        <item>质量（延迟最低）</item>
+        <item>平衡（默认）</item>
+        <item>性能（帧率最高）</item>
+    </string-array>
+    <string-array name="winfg_multiplier_entries">
+        <item>2倍</item>
+        <item>3倍</item>
+        <item>4倍</item>
+    </string-array>
 </resources>
