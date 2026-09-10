@@ -19,7 +19,11 @@ import java.io.File;
 import java.util.Iterator;
 
 public class Container {
-    public static final String DEFAULT_ENV_VARS = "LC_ALL=zh_CN.utf8 ZINK_DESCRIPTORS=lazy ZINK_DEBUG=compact MESA_SHADER_CACHE_MAX_SIZE=512MB TU_DEBUG=noconform MESA_GL_VERSION_OVERRIDE=3.1 DXVK_HUD=fps,version TZ=Asia/Shanghai MESA_VK_WSI_DEBUG=-sw MESA_EXTENSION_MAX_YEAR=2025 BOX64_DYNAREC_WEAKBARRIER=-1 mesa_glthread=true WINEESYNC=1 MESA_SHADER_CACHE_DISABLE=false DXVK_ASYNC=1 DXVK_DISABLE_TIMELINE_SEMAPHORES=1 BOX64_MMAP32=1 LIBGL_ALWAYS_SOFTWARE=0 DRAW_USE_LLVM=0 GST_DEBUG=0 MANGOHUD=0 MANGOHUD_CONFIGFILE=/data/user/0/" + BuildConfig.APPLICATION_ID + "/files/rootfs/home/mangohud2.conf";
+    // Why: WIN_FG_ENABLE=1 让 win-fg 帧生成 layer（VK_LAYER_WIN_framegen）在容器内自动启用。
+    //      置 0 或删除该变量即可整体关闭，不影响原有渲染链路。
+    // What: 仅 DEFAULT_ENV_VARS 常量追加一个环境变量；不改动任何渲染/共存逻辑。
+    // How:  从该字符串删除 "WIN_FG_ENABLE=1" 即可回滚。
+    public static final String DEFAULT_ENV_VARS = "LC_ALL=zh_CN.utf8 ZINK_DESCRIPTORS=lazy ZINK_DEBUG=compact MESA_SHADER_CACHE_MAX_SIZE=512MB TU_DEBUG=noconform MESA_GL_VERSION_OVERRIDE=3.1 DXVK_HUD=fps,version TZ=Asia/Shanghai MESA_VK_WSI_DEBUG=-sw MESA_EXTENSION_MAX_YEAR=2025 BOX64_DYNAREC_WEAKBARRIER=-1 mesa_glthread=true WINEESYNC=1 MESA_SHADER_CACHE_DISABLE=false DXVK_ASYNC=1 DXVK_DISABLE_TIMELINE_SEMAPHORES=1 BOX64_MMAP32=1 LIBGL_ALWAYS_SOFTWARE=0 DRAW_USE_LLVM=0 GST_DEBUG=0 MANGOHUD=0 WIN_FG_ENABLE=1 MANGOHUD_CONFIGFILE=/data/user/0/" + BuildConfig.APPLICATION_ID + "/files/rootfs/home/mangohud2.conf";
     public static final String DEFAULT_SCREEN_SIZE = "1280x720";
     public static final String DEFAULT_SCREEN_ORIENTATION = "landscape";
     public static final boolean DEFAULT_SWAP_RESOLUTION = false;
