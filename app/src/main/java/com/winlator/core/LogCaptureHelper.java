@@ -69,7 +69,7 @@ public class LogCaptureHelper {
 
             File outputFile;
             // 优先保存到 Download 目录（Android 10+ 用应用专属外部目录避免权限问题）
-            File downloadDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOAD);
+            File downloadDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
             if (downloadDir != null && downloadDir.canWrite()) {
                 outputFile = new File(downloadDir, fileName);
             } else {
