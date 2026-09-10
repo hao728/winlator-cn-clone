@@ -1,0 +1,34 @@
+MIT License
+
+Copyright (c) 2026 The412Banner
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+---
+
+本项目（winlator-cn-clone 共存版）集成了 win-fg 帧生成引擎的预编译二进制
+（libwin_fg.so）及其 Vulkan layer manifest（VkLayer_win_framegen.json），
+均来自上游官方 release，未修改源码。
+
+- 上游仓库：https://github.com/The412Banner/win-fg
+- 上游协议：MIT License（见上）
+- 集成方式：CI 构建时自动从上游最新 release 下载，不 fork、不修改源码
+- 用途：为容器内 DXVK/Vulkan 应用提供帧生成（插帧）能力
+- 开关：容器环境变量 WIN_FG_ENABLE=1 启用，删除即关闭
+
