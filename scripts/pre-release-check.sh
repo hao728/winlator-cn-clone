@@ -96,6 +96,9 @@ fi
 
 # --- 5. native 库检查（5 个自有动态渲染器必须存在）---
 # 注意：libadrenotools 是静态库(.a)，链接进 vortekrenderer.so，不单独出现在 APK 中
+# 注意：不能用 "unzip -l | grep -q" 判断存在性——grep -q 命中即退出会导致 unzip
+#       收到 SIGPIPE，在 set -o pipefail 下整条管道返回 141，被 ! 反转为"缺失"，
+#       造成误报。改为 zipinfo -1 输出路径列表并完整消费（无提前退出）。
 REQUIRED_SO=(
   "lib/arm64-v8a/libwinlator.so"
   "lib/arm64-v8a/libgladiorenderer.so"
@@ -105,7 +108,7 @@ REQUIRED_SO=(
 )
 MISSING_SO=()
 for so in "${REQUIRED_SO[@]}"; do
-  if ! unzip -l "$APK_PATH" 2>/dev/null | grep -q "$so"; then
+  if [ -z "$(unzip -Z1 "$APK_PATH" 2>/dev/null | grep -F "$so")" ]; then
     MISSING_SO+=("$so")
   fi
 done
@@ -122,7 +125,7 @@ REQUIRED_ASSETS=(
 )
 MISSING_ASSETS=()
 for a in "${REQUIRED_ASSETS[@]}"; do
-  if ! unzip -l "$APK_PATH" 2>/dev/null | grep -q "$a"; then
+  if [ -z "$(unzip -Z1 "$APK_PATH" 2>/dev/null | grep -F "$a")" ]; then
     MISSING_ASSETS+=("$a")
   fi
 done
@@ -135,7 +138,7 @@ fi
 # --- 6b. win-fg 帧生成引擎检查（assets/winfg/libwin_fg.so 必须存在且 > 1MB）---
 WINFG_SO="assets/winfg/libwin_fg.so"
 WINFG_MANIFEST="assets/winfg/VkLayer_win_framegen.json"
-if unzip -l "$APK_PATH" 2>/dev/null | grep -q "$WINFG_SO"; then
+if [ -n "$(unzip -Z1 "$APK_PATH" 2>/dev/null | grep -F "$WINFG_SO")" ]; then
   WINFG_SIZE=$(unzip -l "$APK_PATH" 2>/dev/null | grep "$WINFG_SO" | awk '{print $1}')
   WINFG_MB=$((WINFG_SIZE / 1024 / 1024))
   if [ "$WINFG_MB" -ge 1 ]; then
@@ -146,7 +149,7 @@ if unzip -l "$APK_PATH" 2>/dev/null | grep -q "$WINFG_SO"; then
 else
   check "win-fg 帧生成引擎缺失 ($WINFG_SO 不在 APK 中)" 1
 fi
-if unzip -l "$APK_PATH" 2>/dev/null | grep -q "$WINFG_MANIFEST"; then
+if [ -n "$(unzip -Z1 "$APK_PATH" 2>/dev/null | grep -F "$WINFG_MANIFEST")" ]; then
   check "win-fg layer manifest 已集成" 0
 else
   check "win-fg layer manifest 缺失" 1
