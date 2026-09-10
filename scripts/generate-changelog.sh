@@ -20,6 +20,9 @@ echo "上次发布 tag: ${LAST_TAG:-无（首次发布）}"
   echo "- 包名：\`${APP_ID}\`（可与原版 com.winlator 共存）"
   echo "- 构建时间：$(date '+%Y-%m-%d %H:%M UTC')"
   echo "- Commit：\`$(git rev-parse --short HEAD)\`"
+  if [ -n "${WINFG_VERSION:-}" ]; then
+    echo "- 集成 win-fg 帧生成引擎：\`${WINFG_VERSION}\`（[上游](https://github.com/The412Banner/win-fg)，MIT License）"
+  fi
   echo ""
 
   if [ -n "$LAST_TAG" ]; then

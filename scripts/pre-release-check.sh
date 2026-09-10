@@ -132,6 +132,26 @@ else
   check "缺少 assets: ${MISSING_ASSETS[*]}" 1
 fi
 
+# --- 6b. win-fg 帧生成引擎检查（assets/winfg/libwin_fg.so 必须存在且 > 1MB）---
+WINFG_SO="assets/winfg/libwin_fg.so"
+WINFG_MANIFEST="assets/winfg/VkLayer_win_framegen.json"
+if unzip -l "$APK_PATH" 2>/dev/null | grep -q "$WINFG_SO"; then
+  WINFG_SIZE=$(unzip -l "$APK_PATH" 2>/dev/null | grep "$WINFG_SO" | awk '{print $1}')
+  WINFG_MB=$((WINFG_SIZE / 1024 / 1024))
+  if [ "$WINFG_MB" -ge 1 ]; then
+    check "win-fg 帧生成引擎已集成 (libwin_fg.so ${WINFG_MB}MB)" 0
+  else
+    check "win-fg libwin_fg.so 过小 (${WINFG_MB}MB < 1MB，下载可能失败)" 1
+  fi
+else
+  check "win-fg 帧生成引擎缺失 ($WINFG_SO 不在 APK 中)" 1
+fi
+if unzip -l "$APK_PATH" 2>/dev/null | grep -q "$WINFG_MANIFEST"; then
+  check "win-fg layer manifest 已集成" 0
+else
+  check "win-fg layer manifest 缺失" 1
+fi
+
 # --- 7. APK 内 lib 目录总大小（确认 native 库不是空壳）---
 LIB_SIZE=$(unzip -l "$APK_PATH" 2>/dev/null | grep "lib/arm64-v8a/" | awk '{sum+=$1} END {print int(sum/1024/1024)}')
 echo "native 库总大小: ${LIB_SIZE:-0}MB"
