@@ -3151,11 +3151,17 @@ void gd_handle_glVertexAttrib4Nub(GLContext* context) {
     GLubyte z = ArrayBuffer_get(&context->inputBuffer);
     GLubyte w = ArrayBuffer_get(&context->inputBuffer);
 
-    println(MSG_DEBUG_UNIMPLEMENTED_FUNC, "glVertexAttrib4Nub");
+    // wined3d 的 generic_d3dcolor 用本函数设置立即模式顶点色；GLES 无 glVertexAttrib4Nub，
+    // 用 4f 按 Nub 语义（归一化）等价实现（wined3d 已按 RGBA 顺序提取分量）。
+    // 原实现为空函数，会使依赖立即模式顶点色的绘制取到默认值。
+    glVertexAttrib4f(index, x / 255.0f, y / 255.0f, z / 255.0f, w / 255.0f);
 }
 
 void gd_handle_glVertexAttrib4Nubv(GLContext* context) {
-    println(MSG_DEBUG_UNIMPLEMENTED_FUNC, "glVertexAttrib4Nubv");
+    GLuint index = ArrayBuffer_getInt(&context->inputBuffer);
+    GLubyte* v = (GLubyte*)ArrayBuffer_getBytes(&context->inputBuffer, 4);
+
+    glVertexAttrib4f(index, v[0] / 255.0f, v[1] / 255.0f, v[2] / 255.0f, v[3] / 255.0f);
 }
 
 void gd_handle_glVertexAttrib4Nuiv(GLContext* context) {
