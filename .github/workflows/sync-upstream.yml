@@ -99,3 +99,38 @@ jobs:
       - name: 无更新时提示
         if: steps.check.outputs.up_to_date == 'true'
         run: echo "上游已是最新，本次不重复构建。"
+
+      # ===== win-fg 帧生成引擎上游跟踪（独立于 winlator 上游）=====
+      # Why: win-fg 更新频率高，需独立检测其 release 版本，有更新则触发构建。
+      # What: 对比 win-fg 最新 release tag 与仓库记录的 .winfg-version，
+      #      不同则更新文件并 push（push 自动触发 build-coexist.yml）。
+      # How:  删除本节即停止 win-fg 自动跟踪（build-coexist 仍会每次拉取最新版）。
+      - name: 检测 win-fg 上游版本
+        id: winfg-check
+        run: |
+          # 从重定向 URL 提取最新 release tag
+          WINFG_LATEST=$(curl -sI "https://github.com/The412Banner/win-fg/releases/latest/download/libwin_fg.so" \
+            | grep -i '^location:' | sed 's#.*/download/\([^/]*\)/.*#\1#' | tr -d '\r')
+          echo "win-fg 最新 release: ${WINFG_LATEST:-unknown}"
+          # 读取仓库记录的版本
+          WINFG_STORED=""
+          if [ -f .winfg-version ]; then
+            WINFG_STORED=$(cat .winfg-version | tr -d '[:space:]')
+          fi
+          echo "仓库记录版本: ${WINFG_STORED:-（无记录）}"
+          if [ "$WINFG_LATEST" != "$WINFG_STORED" ] && [ -n "$WINFG_LATEST" ]; then
+            echo "has_update=true" >> $GITHUB_OUTPUT
+            echo "winfg_version=$WINFG_LATEST" >> $GITHUB_OUTPUT
+            echo "win-fg 有新版本 $WINFG_LATEST，将触发构建。"
+          else
+            echo "has_update=false" >> $GITHUB_OUTPUT
+            echo "win-fg 已是最新（$WINFG_LATEST）。"
+          fi
+
+      - name: 更新 win-fg 版本记录并触发构建
+        if: steps.winfg-check.outputs.has_update == 'true'
+        run: |
+          echo "${{ steps.winfg-check.outputs.winfg_version }}" > .winfg-version
+          git add .winfg-version
+          git commit -m "chore: bump win-fg to ${{ steps.winfg-check.outputs.winfg_version }} (auto-detected upstream release)"
+          git push origin main
