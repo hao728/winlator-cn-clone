@@ -1,6 +1,6 @@
 # Winlator 共存版
 
-基于 [hostei33/winlator-cn](https://github.com/hostei33/winlator-cn)（Winlator 11.2 cn.03 glibc 版），改包名后可与原版 `com.winlator` 共存，且功能完整不缩水。
+基于 [hostei33/winlator-cn](https://github.com/hostei33/winlator-cn)（Winlator 11.2 cn.03 glibc 版），改包名后可与原版 `com.winlator` 共存，功能无删减。
 
 ## 共存原理（三层一致化）
 
