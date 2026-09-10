@@ -171,4 +171,14 @@
         <item>CP2 Direct touch（RA2)</item>
         <item>V3(Dark)</item>
     </string-array>
+    <string-array name="winfg_perf_preset_entries">
+        <item>Quality (lowest latency)</item>
+        <item>Balanced (default)</item>
+        <item>Performance (highest FPS)</item>
+    </string-array>
+    <string-array name="winfg_multiplier_entries">
+        <item>2x</item>
+        <item>3x</item>
+        <item>4x</item>
+    </string-array>
 </resources>
