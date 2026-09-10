@@ -10,6 +10,7 @@ add_library(winlator SHARED
             src/drawable.c
             src/gpu_image.c
             src/gpu_helper.c
+            src/jni_onload.c
             src/sysvshared_memory.c
             src/xconnector_epoll.c
             src/xinput_stream.c
