@@ -604,8 +604,8 @@ bool readUnboundVertexArrays(GLContext* context, GLenum drawMode, int drawCount,
                 uint64_t offset = (uint64_t)vertexAttrib->pointer;
                 swapPixelsRedBlue(pointer + offset, vertexAttrib->stride, byteCount - offset);
                 oldArrayBuffer = clientState->vao->buffer[indexOfGLTarget(GL_ARRAY_BUFFER)];
-                if (clientState->vao->bgraBuffer == 0) glGenBuffers(1, &clientState->vao->bgraBuffer);
-                glBindBuffer(GL_ARRAY_BUFFER, clientState->vao->bgraBuffer);
+                if (clientState->vao->bgraBuffer[i] == 0) glGenBuffers(1, &clientState->vao->bgraBuffer[i]);
+                glBindBuffer(GL_ARRAY_BUFFER, clientState->vao->bgraBuffer[i]);
                 glBufferData(GL_ARRAY_BUFFER, byteCount, pointer, GL_DYNAMIC_DRAW);
                 pointer = vertexAttrib->pointer;
             }

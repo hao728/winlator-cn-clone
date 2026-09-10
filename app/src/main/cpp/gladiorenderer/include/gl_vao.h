@@ -32,7 +32,10 @@ typedef struct GLVertexArrayObject {
     uint8_t maxEnabledAttribs;
     GLVertexAttrib attribs[VERTEX_ATTRIB_COUNT];
     GLBuffer* buffer[MAX_BUFFER_TARGETS];
-    GLuint bgraBuffer;
+    // 每个属性独立的 BGRA 转换缓冲：各属性的客户端数据块彼此独立，
+    // 共用单个 buffer 会被后一个属性的 glBufferData 覆盖，导致先上传的属性
+    // （如颜色）读到未交换 R/B 的数据（黄↔蓝错位）。
+    GLuint bgraBuffer[VERTEX_ATTRIB_COUNT];
 } GLVertexArrayObject;
 
 #define GL_SEND_VERTEX_ARRAY(requestCode, arrayIdx) \
