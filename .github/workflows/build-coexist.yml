@@ -1,15 +1,22 @@
 name: 构建共存版APK
 
 # ============================================================
-# 触发规则（Bannerlator 模式：push 只编译，tag 才发布）
+# 触发规则（Bannerlator 模式：push 只编译，tag 才发布，PR 自动验证）
 #   - push 到 main        → 构建 APK，生成 artifacts，不创建 Release
 #   - push v* 开头的 tag  → 构建 + 自检 + 发布 Release
+#   - 创建/更新 PR        → 构建验证（编译 + 自检，不发布），PR 页面可直接看 CI 结果
 #   - 手动运行           → 按当前 ref 类型决定是否发布（branch 不发布）
 # ============================================================
 on:
   push:
     branches: [main]
     tags: ['v*']
+    paths-ignore:
+      - '**.md'
+  pull_request:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
   workflow_dispatch:
 
 env:

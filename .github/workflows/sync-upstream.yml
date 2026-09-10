@@ -1,9 +1,29 @@
-name: 同步上游并自动构建
+name: 同步上游并自动构建发布
 
+# ============================================================
+# 全自动模式：每日自动合并上游 → 自动打 tag → 自动构建发布
+#
+# 工作流：
+#   1. 拉取上游 hostei33/winlator-cn main
+#   2. 有新提交 → 自动合并（冲突保留我们的共存改动）→ push main（触发编译验证）
+#   3. 检测 win-fg 帧生成引擎上游版本 → 有新版 → bump → push（触发编译验证）
+#   4. 上游或 win-fg 有更新 → 自动打 tag → push tag（触发构建 + 自检 + 发布）
+#
+# 安全网：
+#   - 构建失败 → 不发布（workflow 直接失败）
+#   - 发布前自检有跳过项 → pre-release，不设 Latest
+#   - 自检全过 → 正式版 + Latest
+#
+# 不想全自动发布？把下方 AUTO_RELEASE 改为 'false'
+#   → 只合并代码，不自动打 tag，由你手动打 tag 发布
+# ============================================================
 on:
   schedule:
     - cron: '0 18 * * *'   # 每天 UTC 18:00 = 北京时间次日 02:00
   workflow_dispatch:
+
+env:
+  AUTO_RELEASE: 'true'     # true=全自动发布；false=只合并代码手动发布
 
 permissions:
   contents: write
@@ -35,7 +55,7 @@ jobs:
           echo "local=$LOCAL remote=$REMOTE"
           if [ "$LOCAL" = "$REMOTE" ]; then
             echo "up_to_date=true" >> $GITHUB_OUTPUT
-            echo "上游无新提交，跳过。"
+            echo "上游无新提交，跳过合并。"
           else
             echo "up_to_date=false" >> $GITHUB_OUTPUT
             echo "上游有新提交，开始合并。"
@@ -45,7 +65,7 @@ jobs:
         if: steps.check.outputs.up_to_date == 'false'
         run: |
           git checkout main
-          # 合并上游；冲突文件保留我们的版本(--ours)，因为我们的改动是把硬编码改动态
+          # 合并上游；冲突文件保留我们的版本(-X ours)，因为我们的改动是把硬编码改动态
           git merge upstream/main --no-edit -X ours || {
             echo "=== merge 产生冲突，对所有冲突文件保留我们的版本 ==="
             git diff --name-only --diff-filter=U | while read f; do
@@ -68,13 +88,15 @@ jobs:
             "app/src/main/java/com/winlator/container/Container.java"
             "app/src/main/java/com/winlator/core/AppUtils.java"
             "app/src/main/java/com/winlator/core/FileUtils.java"
+            "app/src/main/java/com/winlator/core/LogCaptureHelper.java"
+            "app/src/main/java/com/winlator/core/WinFGConfig.java"
             "app/src/main/java/com/winlator/widget/EnvVarsView.java"
             "app/src/main/java/com/winlator/winhandler/WinHandler.java"
+            "app/src/main/java/com/winlator/ContainerDetailFragment.java"
+            "app/src/main/res/layout/container_detail_fragment.xml"
             "app/src/main/cpp/gladiorenderer/CMakeLists.txt"
           )
           # 找出上游本次更新中触及的共存文件
-          # merge commit 有两个 parent：HEAD^1=合并前本地，HEAD^2=上游
-          # 对比两者能准确找出上游带来的变更文件
           CHANGED=$(git diff --name-only HEAD^1 HEAD^2 2>/dev/null || git diff --name-only HEAD~1 HEAD 2>/dev/null || true)
           OVERLAP=""
           for f in "${COEXIST_FILES[@]}"; do
@@ -96,15 +118,7 @@ jobs:
         if: steps.check.outputs.up_to_date == 'false'
         run: git push origin main
 
-      - name: 无更新时提示
-        if: steps.check.outputs.up_to_date == 'true'
-        run: echo "上游已是最新，本次不重复构建。"
-
-      # ===== win-fg 帧生成引擎上游跟踪（独立于 winlator 上游）=====
-      # Why: win-fg 更新频率高，需独立检测其 release 版本，有更新则触发构建。
-      # What: 对比 win-fg 最新 release tag 与仓库记录的 .winfg-version，
-      #      不同则更新文件并 push（push 自动触发 build-coexist.yml）。
-      # How:  删除本节即停止 win-fg 自动跟踪（build-coexist 仍会每次拉取最新版）。
+      # ===== win-fg 帧生成引擎上游跟踪 =====
       - name: 检测 win-fg 上游版本
         id: winfg-check
         run: |
@@ -112,7 +126,6 @@ jobs:
           WINFG_LATEST=$(curl -sI "https://github.com/The412Banner/win-fg/releases/latest/download/libwin_fg.so" \
             | grep -i '^location:' | sed 's#.*/download/\([^/]*\)/.*#\1#' | tr -d '\r')
           echo "win-fg 最新 release: ${WINFG_LATEST:-unknown}"
-          # 读取仓库记录的版本
           WINFG_STORED=""
           if [ -f .winfg-version ]; then
             WINFG_STORED=$(cat .winfg-version | tr -d '[:space:]')
@@ -121,16 +134,44 @@ jobs:
           if [ "$WINFG_LATEST" != "$WINFG_STORED" ] && [ -n "$WINFG_LATEST" ]; then
             echo "has_update=true" >> $GITHUB_OUTPUT
             echo "winfg_version=$WINFG_LATEST" >> $GITHUB_OUTPUT
-            echo "win-fg 有新版本 $WINFG_LATEST，将触发构建。"
+            echo "win-fg 有新版本 $WINFG_LATEST。"
           else
             echo "has_update=false" >> $GITHUB_OUTPUT
             echo "win-fg 已是最新（$WINFG_LATEST）。"
           fi
 
-      - name: 更新 win-fg 版本记录并触发构建
+      - name: 更新 win-fg 版本记录
         if: steps.winfg-check.outputs.has_update == 'true'
         run: |
           echo "${{ steps.winfg-check.outputs.winfg_version }}" > .winfg-version
           git add .winfg-version
           git commit -m "chore: bump win-fg to ${{ steps.winfg-check.outputs.winfg_version }} (auto-detected upstream release)"
           git push origin main
+
+      # ===== 自动发布（全自动模式）=====
+      # Why: 上游或 win-fg 有更新时，自动打 tag 触发 build-coexist 发布。
+      # What: tag 名含上游版本 + win-fg 版本 + 时间戳，保证唯一且信息完整。
+      # How:  把 AUTO_RELEASE 改为 'false' 即禁用自动发布，改为手动打 tag。
+      - name: 自动打 tag 触发发布
+        if: env.AUTO_RELEASE == 'true' && (steps.check.outputs.up_to_date == 'false' || steps.winfg-check.outputs.has_update == 'true')
+        run: |
+          # 读取上游版本号（build.gradle 可能是占位符，用默认值兜底）
+          VER=$(grep -oE 'versionName "[^"]+"' app/build.gradle 2>/dev/null | head -1 | sed 's/.*"\(.*\)"/\1/')
+          [ -z "$VER" ] || [ "$VER" = "__VERSION_NAME__" ] && VER="11.2.cn.03"
+          WFG=$(cat .winfg-version 2>/dev/null || echo "v0.3.0")
+          # 时间戳保证 tag 唯一
+          TS=$(date +%Y%m%d-%H%M)
+          TAG="v${VER}-coexist-winfg-${WFG}-${TS}"
+          # 极端情况：同一分钟内重复运行，追加秒数避免冲突
+          if git ls-remote --tags origin "$TAG" 2>/dev/null | grep -q "$TAG"; then
+            TAG="${TAG}-$(date +%S)"
+          fi
+          git tag "$TAG"
+          git push origin "$TAG"
+          echo "已自动打 tag: $TAG（已触发构建 + 自检 + 发布）"
+          # 输出给后续步骤
+          echo "auto_tag=$TAG" >> $GITHUB_OUTPUT
+
+      - name: 无更新时提示
+        if: steps.check.outputs.up_to_date == 'true' && steps.winfg-check.outputs.has_update == 'false'
+        run: echo "上游与 win-fg 均已是最新，无需构建发布。"
