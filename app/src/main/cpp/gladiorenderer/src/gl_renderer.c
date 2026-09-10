@@ -826,7 +826,14 @@ int GLRenderer_getParamsv(GLRenderer* renderer, GLenum pname, GLenum type, void*
             if (params) *(GLfloat*)params = renderer->state.fog.mode;
             break;
         case GL_CONTEXT_PROFILE_MASK:
-            if (params) *(GLint*)params = (GL_CONTEXT_CORE_PROFILE_BIT | GL_CONTEXT_COMPATIBILITY_PROFILE_BIT);
+            /* wined3d 依据 GL_CONTEXT_PROFILE_MASK 判断 core/legacy 上下文：
+             * 若返回 CORE_PROFILE_BIT，wined3d 会走 glGetStringi(GL_EXTENSIONS, i)
+             * 逐条枚举扩展（core profile 语义），而 gladio 未实现 glGetStringi，
+             * 导致 wined3d 解析不到任何扩展，feature level 判定全部失败
+             * （d3d9 报 "None of the requested D3D feature levels is supported"）。
+             * 返回 0 让 wined3d 判定为 legacy 上下文，改用 glGetString(GL_EXTENSIONS)
+             * 解析扩展（gladio 已实现），92 个扩展全部生效。 */
+            if (params) *(GLint*)params = 0;
             break;
         case GL_SHADE_MODEL:
             if (params) *(GLint*)params = renderer->state.shadeModel;
