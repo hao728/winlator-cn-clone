@@ -1,10 +1,15 @@
 name: 构建共存版APK
 
+# ============================================================
+# 触发规则（Bannerlator 模式：push 只编译，tag 才发布）
+#   - push 到 main        → 构建 APK，生成 artifacts，不创建 Release
+#   - push v* 开头的 tag  → 构建 + 自检 + 发布 Release
+#   - 手动运行           → 按当前 ref 类型决定是否发布（branch 不发布）
+# ============================================================
 on:
   push:
     branches: [main]
-    paths-ignore:
-      - '**.md'
+    tags: ['v*']
   workflow_dispatch:
 
 env:
@@ -35,6 +40,39 @@ jobs:
           chmod +x scripts/apply-config.sh
           bash scripts/apply-config.sh coexist.properties app/build.gradle
 
+      - name: 拉取 win-fg 最新 release（帧生成引擎，MIT）
+        run: |
+          # Why: win-fg 是独立 Vulkan 帧生成 layer，与 winlator 解耦。
+          #      不 fork 上游源码，CI 构建时自动拉取官方最新 release 预编译 .so，
+          #      零编译、零维护、自动跟随上游版本。
+          # What: 下载 libwin_fg.so + layer manifest 到 assets/winfg/，
+          #      修正 manifest library_path 为 guest 绝对路径。
+          # How:  删除本步骤即回退到无帧生成版本。
+          mkdir -p app/src/main/assets/winfg
+          # latest/download 自动重定向到最新 release 资产，零 API 调用不限流
+          curl -fsSL -o app/src/main/assets/winfg/libwin_fg.so \
+            "https://github.com/The412Banner/win-fg/releases/latest/download/libwin_fg.so" \
+            || { echo "::error::libwin_fg.so 下载失败"; exit 1; }
+          curl -fsSL -o app/src/main/assets/winfg/VkLayer_win_framegen.json \
+            "https://github.com/The412Banner/win-fg/releases/latest/download/VkLayer_win_framegen.json" \
+            || { echo "::error::layer manifest 下载失败"; exit 1; }
+          # 修正 library_path：官方是 ./ 相对路径，guest Vulkan loader 需绝对路径
+          python3 -c "
+          import json
+          p='app/src/main/assets/winfg/VkLayer_win_framegen.json'
+          d=json.load(open(p))
+          d['layer']['library_path']='/usr/lib/libwin_fg.so'
+          json.dump(d, open(p,'w'), indent=4)
+          "
+          # 验证下载结果
+          ls -lh app/src/main/assets/winfg/
+          test -s app/src/main/assets/winfg/libwin_fg.so || { echo "::error::libwin_fg.so 为空"; exit 1; }
+          # 提取 win-fg 版本号（从重定向 URL 的 download/<tag>/ 路径）
+          WINFG_TAG=$(curl -sI "https://github.com/The412Banner/win-fg/releases/latest/download/libwin_fg.so" \
+            | grep -i '^location:' | sed 's#.*/download/\([^/]*\)/.*#\1#' | tr -d '\r')
+          echo "WINFG_VERSION=${WINFG_TAG:-unknown}" >> $GITHUB_ENV
+          echo "win-fg 版本: ${WINFG_TAG:-unknown}"
+
       - name: 对 assets 做等长包名替换
         run: |
           python3 scripts/patch-assets.py --config coexist.properties --assets-dir app/src/main/assets
@@ -45,6 +83,8 @@ jobs:
           du -sh app/src/main/assets/
           echo "=== rootfs.tzst ==="
           ls -lh app/src/main/assets/rootfs.tzst
+          echo "=== win-fg 帧生成引擎 ==="
+          ls -lh app/src/main/assets/winfg/
           echo "=== build.gradle 关键行 ==="
           grep -E "applicationId|versionCode|versionName" app/build.gradle
 
@@ -141,12 +181,17 @@ jobs:
           path: "*.apk"
           retention-days: 30
 
+      # ============================================================
+      # 发布 Release：仅当本次运行由 git tag 触发（Bannerlator 模式）
+      # 普通 push / 手动运行（branch）→ 只编译，不发布
+      # ============================================================
       - name: 发布 Release
+        if: github.ref_type == 'tag'
         uses: softprops/action-gh-release@v2
         with:
           files: "*.apk"
-          name: "Winlator 共存版 ${{ env.VERSION_NAME }} (${{ env.APP_ID }})"
-          tag_name: "coexist-${{ env.VERSION_NAME }}-${{ github.run_number }}"
+          name: "Winlator 共存版 ${{ env.VERSION_NAME }} (${{ env.APP_ID }}) + win-fg ${{ env.WINFG_VERSION }}"
+          tag_name: ${{ github.ref_name }}
           draft: false
           # 自检全过无警告 → 正式版（自动 Latest）；有跳过项 → pre-release（需人工验证）
           prerelease: ${{ env.SELF_CHECK_NEED_MANUAL == '1' }}
