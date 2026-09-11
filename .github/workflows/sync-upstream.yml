@@ -22,6 +22,11 @@ on:
     - cron: '0 18 * * *'   # 每天 UTC 18:00 = 北京时间次日 02:00
   workflow_dispatch:
 
+# 并发锁：同一时间只允许一个 sync 运行，避免重复合并/重复 push
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
 env:
   AUTO_RELEASE: 'true'     # true=全自动发布；false=只合并代码手动发布
 
@@ -203,6 +208,32 @@ jobs:
         run: |
           echo "=== 推送前诊断 ==="
           git log --oneline -3
+          # 获取远程 main 最新状态
+          git fetch origin main 2>&1 || echo "(fetch origin 失败)"
+          LOCAL_HEAD=$(git rev-parse HEAD)
+          REMOTE_HEAD=$(git rev-parse origin/main 2>/dev/null || echo "unknown")
+          echo "本地 HEAD:  ${LOCAL_HEAD:0:10}"
+          echo "远程 main: ${REMOTE_HEAD:0:10}"
+
+          # Why: 用户可能在 workflow 运行期间手动改了 main（网页直接编辑/上传），
+          #      导致 CI 的本地提交落后于远程 → push 报 non-fast-forward。
+          # What: 若本地不是远程的后代，先 rebase 到远程最新，再 push。
+          # How:  如果不想自动 rebase，删掉下面这个 if 块即可（但会再次 non-fast-forward 失败）。
+          if [ "$REMOTE_HEAD" != "unknown" ] && [ "$LOCAL_HEAD" != "$REMOTE_HEAD" ]; then
+            if git merge-base --is-ancestor origin/main HEAD 2>/dev/null; then
+              echo "本地领先远程（可 fast-forward），直接 push"
+            else
+              echo "::warning::检测到远程 main 有本地没有的新提交（可能你手动改过 main），先 rebase 再 push"
+              git pull --rebase origin main 2>&1 || {
+                echo "::error::rebase 失败（远程改动与本地冲突），已中止，请人工处理"
+                git rebase --abort 2>/dev/null || true
+                exit 1
+              }
+              echo "rebase 完成，最新提交:"
+              git log --oneline -3
+            fi
+          fi
+
           echo "=== 执行 git push origin main ==="
           # 捕获 git push 的原始错误，输出到注解（未登录也能在 Annotations 看到）
           PUSH_OUT=$(git push origin main 2>&1) && {
@@ -216,7 +247,9 @@ jobs:
               [ -n "$line" ] && echo "::error::$line"
             done
             echo "::error::======================================"
-            echo "::error::排查：403=权限不足/分支保护；401=PAT无效；non-fast-forward=远程有新提交"
+            echo "::error::排查：hint: Updates were rejected（non-fast-forward）→ 已自动 rebase 处理；"
+            echo "::error::排查：403/denied → 分支保护未删干净（Settings→Branches）或 Workflow permissions 不是 Read and write；"
+            echo "::error::排查：401/Authentication failed → PAT/GITHUB_TOKEN 无效"
             exit 1
           }
 
@@ -248,7 +281,14 @@ jobs:
           echo "${{ steps.winfg-check.outputs.winfg_version }}" > .winfg-version
           git add .winfg-version
           git commit -m "chore: bump win-fg to ${{ steps.winfg-check.outputs.winfg_version }} (auto-detected upstream release)"
-          git push origin main
+          # push 前先同步远程，避免 non-fast-forward
+          git fetch origin main 2>&1 || true
+          if ! git merge-base --is-ancestor origin/main HEAD 2>/dev/null; then
+            echo "远程 main 有新提交，先 rebase"
+            git pull --rebase origin main 2>&1 || { echo "::error::rebase 失败"; git rebase --abort 2>/dev/null || true; exit 1; }
+          fi
+          git push origin main 2>&1 || { echo "::error::push 失败（见上）"; exit 1; }
+          echo "win-fg 版本记录已更新并推送 ✓"
 
       # ===== 自动发布（全自动模式）=====
       # Why: 上游或 win-fg 有更新时，自动打 tag 触发 build-coexist 发布。
