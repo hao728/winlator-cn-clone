@@ -37,10 +37,25 @@ jobs:
         with:
           fetch-depth: 0   # 必须完整历史才能 merge
 
-      - name: 配置 git
+      - name: 配置 git（PAT 认证，绕过分支保护）
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          # Why: GITHUB_TOKEN 无法绕过 main 分支保护规则（require PR / status checks），
+          #      必须用 Personal Access Token 才能直接 push 到受保护的 main。
+          # What: 把 origin remote 的认证替换为 PAT，后续所有 git push 自动使用。
+          # How:  删除 SYNC_TOKEN secret 即回退为 GITHUB_TOKEN（但分支保护会导致 push 失败）。
+          if [ -z "${{ secrets.SYNC_TOKEN }}" ]; then
+            echo "::error::========================================"
+            echo "::error::未配置 SYNC_TOKEN secret！"
+            echo "::error::请先去 Settings → Secrets and variables → Actions"
+            echo "::error::→ New repository secret → Name: SYNC_TOKEN"
+            echo "::error::→ Value: 你的 Fine-grained PAT（Contents: Read and write）"
+            echo "::error::========================================"
+            exit 1
+          fi
+          git remote set-url origin https://x-access-token:${{ secrets.SYNC_TOKEN }}@github.com/hao728/winlator-cn-clone.git
+          echo "PAT 认证已配置，origin remote 已更新"
 
       - name: 添加上游并拉取
         run: |
@@ -163,7 +178,25 @@ jobs:
 
       - name: 推送合并结果
         if: steps.check.outputs.up_to_date == 'false'
-        run: git push origin main
+        run: |
+          echo "=== 推送前诊断 ==="
+          git remote -v
+          git log --oneline -3
+          echo "=== 执行 git push origin main ==="
+          if ! git push origin main 2>&1; then
+            echo ""
+            echo "::error::========================================"
+            echo "::error::推送失败！请按以下顺序排查："
+            echo "::error::  ① Settings → Actions → General → Workflow permissions"
+            echo "::error::     必须选「Read and write permissions」（默认只读会导致 403）"
+            echo "::error::  ② Settings → Branches → Branch protection rules"
+            echo "::error::     如果 main 有保护（require PR / status checks），GITHUB_TOKEN 无法直接 push"
+            echo "::error::     → 删除 main 保护规则，或在保护规则里给 github-actions[bot] 豁免"
+            echo "::error::  ③ 以上都不行 → 改用 PAT（见操作说明「PAT 备选方案」）"
+            echo "::error::========================================"
+            exit 1
+          fi
+          echo "推送成功"
 
       # ===== win-fg 帧生成引擎上游跟踪 =====
       - name: 检测 win-fg 上游版本
