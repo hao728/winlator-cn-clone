@@ -209,7 +209,7 @@ jobs:
         id: winfg-check
         run: |
           # native 集成用源码而非 release .so，跟踪上游 main 分支 commit
-          WINFG_LATEST=$(git ls-remote https://github.com/The412Banner/win-fg.git main 2>/dev/null | awk '{print substr($1,1,12)}')
+          WINFG_LATEST=$(git ls-remote https://github.com/The412Banner/win-fg.git master 2>/dev/null | awk '{print substr($1,1,12)}')
           echo "win-fg 上游 commit: ${WINFG_LATEST:-unknown}"
           WINFG_STORED=""
           if [ -f .winfg-version ]; then
@@ -330,14 +330,14 @@ jobs:
           WINFG_FILES="framegen.cpp framegen.hpp record_impl.inc config.hpp embedded_shaders.hpp vk_dispatch.hpp log.hpp"
           for f in $WINFG_FILES; do
             curl -fsSL -o "app/src/main/cpp/winlator/winfg/$f" \
-              "https://raw.githubusercontent.com/The412Banner/win-fg/main/src/$f" \
+              "https://raw.githubusercontent.com/The412Banner/win-fg/master/src/$f" \
               || { echo "::error::win-fg 源码下载失败: $f"; exit 1; }
           done
           # 下载 license 和 attribution
           curl -fsSL -o app/src/main/cpp/winlator/winfg/LICENSE.win-fg \
-            "https://raw.githubusercontent.com/The412Banner/win-fg/main/LICENSE" || true
+            "https://raw.githubusercontent.com/The412Banner/win-fg/master/LICENSE" || true
           curl -fsSL -o app/src/main/cpp/winlator/winfg/NOTICE_FIDELITYFX_OPTICALFLOW.md \
-            "https://raw.githubusercontent.com/The412Banner/win-fg/main/NOTICE_FIDELITYFX_OPTICALFLOW.md" || true
+            "https://raw.githubusercontent.com/The412Banner/win-fg/master/NOTICE_FIDELITYFX_OPTICALFLOW.md" || true
           ls -lh app/src/main/cpp/winlator/winfg/
           test -s app/src/main/cpp/winlator/winfg/framegen.cpp || { echo "::error::framegen.cpp 为空"; exit 1; }
           echo "WINFG_VERSION=${{ steps.winfg-check.outputs.winfg_version }}" >> $GITHUB_ENV
