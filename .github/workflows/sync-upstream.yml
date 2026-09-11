@@ -313,10 +313,14 @@ jobs:
           echo "win-fg 版本记录已更新并推送 ✓"
 
       # ===== 自动发布（全自动模式）=====
-      # Why: 上游或 win-fg 有更新时，自动打 tag 触发 build-coexist 发布。
+      # Why: 上游或 win-fg 有更新时，自动打 tag 并触发 build-coexist 发布。
       # What: tag 名含上游版本 + win-fg 版本 + 时间戳，保证唯一且信息完整。
+      #       用 GITHUB_TOKEN push tag（不会触发其他 workflow），再通过 API 显式触发
+      #       build-coexist 的 workflow_dispatch——这是唯一可靠的跨 workflow 触发方式，
+      #       不依赖 PAT（PAT 无效时 GITHUB_TOKEN push tag 不会触发构建）。
       # How:  把 AUTO_RELEASE 改为 'false' 即禁用自动发布，改为手动打 tag。
-      - name: 自动打 tag 触发发布
+      - name: 自动打 tag 并触发构建发布
+        id: auto-tag
         if: env.AUTO_RELEASE == 'true' && (steps.check.outputs.up_to_date == 'false' || steps.winfg-check.outputs.has_update == 'true')
         run: |
           # 读取上游版本号（build.gradle 可能是占位符，用默认值兜底）
@@ -331,9 +335,12 @@ jobs:
             TAG="${TAG}-$(date +%S)"
           fi
           git tag "$TAG"
-          TAG_OUT=$(git push origin "$TAG" 2>&1) && {
+
+          # 用 GITHUB_TOKEN push tag（GITHUB_TOKEN push 不会触发其他 workflow，避免重复构建）
+          echo "=== 推送 tag: $TAG ==="
+          TAG_OUT=$(git push "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "$TAG" 2>&1) && {
             echo "$TAG_OUT"
-            echo "已自动打 tag: $TAG（已触发构建 + 自检 + 发布）"
+            echo "tag 推送成功 ✓"
           } || {
             echo "$TAG_OUT"
             echo "::error::推送 tag 失败："
@@ -342,6 +349,23 @@ jobs:
             done
             exit 1
           }
+
+          # 通过 API 显式触发 build-coexist 的 workflow_dispatch（ref=tag）
+          # GITHUB_TOKEN 可以触发同仓库的 workflow_dispatch，不受"不触发事件"规则限制
+          echo "=== 触发 build-coexist 构建发布（workflow_dispatch）==="
+          HTTP_CODE=$(curl -s -o /tmp/trigger_resp.txt -w "%{http_code}" -X POST \
+            -H "Authorization: token ${GITHUB_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/workflows/build-coexist.yml/dispatches" \
+            -d "{\"ref\":\"refs/tags/${TAG}\"}")
+          if [ "$HTTP_CODE" = "204" ]; then
+            echo "build-coexist 构建已触发 ✓（约 5 分钟后完成，请到 Actions 页面查看）"
+          else
+            echo "::error::触发 build-coexist 失败，HTTP $HTTP_CODE"
+            cat /tmp/trigger_resp.txt 2>/dev/null | head -20
+            exit 1
+          fi
+
           # 输出给后续步骤
           echo "auto_tag=$TAG" >> $GITHUB_OUTPUT
 
