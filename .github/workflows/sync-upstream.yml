@@ -1,102 +1,71 @@
 name: 同步上游并自动构建发布
 
 # ============================================================
-# 全自动模式：每日自动合并上游 → 自动打 tag → 自动构建发布
+# 全自动单工作流：合并上游 → 保护定制文件 → 构建 APK → 自检 → 发布 Release
+#   - 每天 UTC 18:00 自动运行（北京时间次日 02:00）
+#   - 可手动 Run workflow（可选"强制构建"输入）
+#   - 上游或 win-fg 有更新时 → 构建并自动发布
+#   - 无更新时 → 仅提示，不浪费构建
 #
-# 工作流：
-#   1. 拉取上游 hostei33/winlator-cn main
-#   2. 有新提交 → 自动合并（冲突保留我们的共存改动）→ push main（触发编译验证）
-#   3. 检测 win-fg 帧生成引擎上游版本 → 有新版 → bump → push（触发编译验证）
-#   4. 上游或 win-fg 有更新 → 自动打 tag → push tag（触发构建 + 自检 + 发布）
-#
-# 安全网：
-#   - 构建失败 → 不发布（workflow 直接失败）
-#   - 发布前自检有跳过项 → pre-release，不设 Latest
-#   - 自检全过 → 正式版 + Latest
-#
-# 不想全自动发布？把下方 AUTO_RELEASE 改为 'false'
-#   → 只合并代码，不自动打 tag，由你手动打 tag 发布
+# 注意：本 workflow 不再调用 API 触发 build-coexist.yml（GITHUB_TOKEN
+#       无法触发同仓库 workflow_dispatch，会 401），构建发布全部在此完成。
+#       build-coexist.yml 保留用于：PR 编译验证 / push main 编译验证 / 手动 push tag 发布。
 # ============================================================
 on:
   schedule:
     - cron: '0 18 * * *'   # 每天 UTC 18:00 = 北京时间次日 02:00
   workflow_dispatch:
+    inputs:
+      force_build:
+        description: '强制构建并发布（即使上游无更新）'
+        type: boolean
+        default: false
 
-# 并发锁：同一时间只允许一个 sync 运行，避免重复合并/重复 push
+# 并发锁：同一时间只允许一个运行，避免重复合并/重复构建
 concurrency:
   group: sync-upstream
   cancel-in-progress: false
 
 env:
-  AUTO_RELEASE: 'true'     # true=全自动发布；false=只合并代码手动发布
+  JAVA_VERSION: '17'
+  NDK_VERSION: '24.0.8215888'
+  UPSTREAM_REPO: 'hostei33/winlator-cn'
+  UPSTREAM_BRANCH: 'main'
 
 permissions:
   contents: write
-  actions: write    # 触发 build-coexist workflow_dispatch 需要 actions: write
 
 jobs:
-  sync:
+  sync-build:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0   # 必须完整历史才能 merge
+          lfs: false
+          fetch-depth: 0   # 需要完整历史才能 merge
 
-      - name: 配置 git（PAT 优先，无效则回退 GITHUB_TOKEN）
+      - name: 配置 git
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-
-          # Why: main 有分支保护时 GITHUB_TOKEN 无法 push，需 PAT 绕过；
-          #      删了分支保护后 GITHUB_TOKEN 即可直接 push，无需 PAT。
-          # What: 优先验证 PAT，有效则用 PAT；无效/未配置则回退 GITHUB_TOKEN。
-          # How:  删除 SYNC_TOKEN secret 或 PAT 无效时自动回退；删分支保护后 GITHUB_TOKEN 即可工作。
-          TOKEN="${{ secrets.SYNC_TOKEN }}"
-          USE_PAT=false
-
-          if [ -n "$TOKEN" ]; then
-            echo "检测到 SYNC_TOKEN，正在验证..."
-            HTTP_CODE=$(curl -s -o /tmp/repo_info.json -w "%{http_code}" \
-              -H "Authorization: Bearer $TOKEN" \
-              -H "Accept: application/vnd.github+json" \
-              https://api.github.com/repos/hao728/winlator-cn-clone)
-            echo "PAT API 状态码: $HTTP_CODE（200=有效，401=token无效，403=权限不足）"
-            if [ "$HTTP_CODE" = "200" ]; then
-              PUSH_PERM=$(python3 -c "import json; d=json.load(open('/tmp/repo_info.json')); print(d.get('permissions',{}).get('push','unknown'))" 2>/dev/null || echo "unknown")
-              echo "PAT push 权限: $PUSH_PERM"
-              if [ "$PUSH_PERM" = "True" ]; then
-                git remote set-url origin https://x-access-token:${TOKEN}@github.com/hao728/winlator-cn-clone.git
-                USE_PAT=true
-                echo "✓ PAT 验证通过，使用 PAT 认证（可绕过分支保护）"
-              else
-                echo "::warning::PAT 没有 push 权限（push=$PUSH_PERM），回退使用 GITHUB_TOKEN"
-              fi
-            else
-              echo "::warning::PAT 无效（HTTP $HTTP_CODE），回退使用 GITHUB_TOKEN"
-              echo "::warning::401=token复制错误/带空格；403=权限不足。手机复制时注意不要带空格换行"
-            fi
-          else
-            echo "未配置 SYNC_TOKEN，使用 GITHUB_TOKEN"
-          fi
-
-          if [ "$USE_PAT" = "false" ]; then
-            echo "→ 使用 GITHUB_TOKEN（要求 main 无分支保护，且 Workflow permissions 为 Read and write）"
-            echo "→ 如 push 失败，请去 Settings → Branches 删除 main 的分支保护规则"
-          fi
+          git remote set-url origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
 
       - name: 添加上游并拉取
         run: |
-          git remote add upstream https://github.com/hostei33/winlator-cn.git 2>/dev/null || true
-          git fetch upstream main
+          git remote remove upstream 2>/dev/null || true
+          git remote add upstream "https://github.com/${UPSTREAM_REPO}.git"
+          git fetch upstream "${UPSTREAM_BRANCH}" 2>&1 | tail -3
+          echo "=== 上游最新提交 ==="
+          git log upstream/${UPSTREAM_BRANCH} --oneline -1
 
       - name: 检查上游是否有新提交
         id: check
         run: |
           LOCAL=$(git rev-parse HEAD)
-          REMOTE=$(git rev-parse upstream/main)
-          echo "local=$LOCAL remote=$REMOTE"
-          if [ "$LOCAL" = "$REMOTE" ]; then
+          UPSTREAM=$(git rev-parse upstream/${UPSTREAM_BRANCH})
+          echo "本地: ${LOCAL:0:10}  上游: ${UPSTREAM:0:10}"
+          if [ "$LOCAL" = "$UPSTREAM" ]; then
             echo "up_to_date=true" >> $GITHUB_OUTPUT
             echo "上游无新提交，跳过合并。"
           else
@@ -104,17 +73,17 @@ jobs:
             echo "上游有新提交，开始合并。"
           fi
 
-      - name: 合并上游（区域保护：定制文件/目录永不被上游覆盖）
+      # ============================================================
+      # 【区域保护策略】冲突时以下文件/目录永远保留我们的版本
+      #   OURS_FILES = 精确文件路径（新增定制文件时加这里）
+      #   OURS_DIRS  = 整个目录保护（目录下任何文件冲突都保留 ours）
+      #   EXCLUDE    = 上游有但我们不要的文件（merge 后自动删除）
+      # ============================================================
+      - name: 合并上游（区域保护）
         if: steps.check.outputs.up_to_date == 'false'
         run: |
           git checkout main
 
-          # ============================================================
-          # 【区域保护策略】冲突时以下文件/目录永远保留我们的版本
-          #   OURS_FILES = 精确文件路径（新增定制文件时加这里）
-          #   OURS_DIRS  = 整个目录保护（目录下任何文件冲突都保留 ours）
-          #   不在保护范围内的文件冲突 → 采用上游新版（让上游更新生效）
-          # ============================================================
           OURS_FILES=(
             # --- 项目治理/文档（我们自己写的，绝不能被上游覆盖）---
             "README.md"
@@ -190,13 +159,11 @@ jobs:
           # ===== 保护区域兜底：merge 后强制恢复（防止无冲突自动合入污染）=====
           # Why: 即使没有冲突，上游对 .github/workflows 的改动也会自动合入，
           #      导致 push 被 GitHub 拒绝（GitHub App 不能改 workflow）或覆盖我们的 CI。
-          # What: 用 ORIG_HEAD（merge 前的 HEAD=我们的版本）恢复所有保护目录，
-          #       并删除上游在保护目录里新增的文件。
           echo "=== 保护区域兜底恢复 ==="
           for d in "${OURS_DIRS[@]}"; do
             # 1) 恢复 ORIG_HEAD 中已有的文件为我们的版本
             git checkout ORIG_HEAD -- "$d" 2>/dev/null && echo "🛡 恢复目录: $d/" || true
-            # 2) 删除上游在保护目录新增的文件（同时兼容"已commit"和"冲突处理中"两种状态）
+            # 2) 删除上游在保护目录新增的文件（兼容已commit/冲突处理中两种状态）
             { git diff --name-only --diff-filter=A ORIG_HEAD HEAD -- "$d/" 2>/dev/null
               git diff --cached --name-only --diff-filter=A -- "$d/" 2>/dev/null
             } | sort -u | while read -r f; do
@@ -213,7 +180,6 @@ jobs:
           done
 
           git add -A 2>/dev/null || true
-          # merge 无冲突时已自动 commit → amend；有冲突已 commit → amend；无变化 → 跳过
           if git diff --cached --quiet 2>/dev/null; then
             echo "保护区域无变化"
           else
@@ -221,101 +187,6 @@ jobs:
             echo "保护区域已恢复 ✓"
           fi
           git log --oneline -5
-
-      - name: 检测上游是否更新了保护区域文件
-        if: steps.check.outputs.up_to_date == 'false'
-        id: conflict-check
-        run: |
-          # 与合并步骤一致的保护文件/目录列表
-          OURS_FILES=(
-            "README.md" "CHANGELOG.md" "coexist.properties"
-            "app/build.gradle" "gradle.properties" "app/src/main/AndroidManifest.xml"
-            "app/src/main/java/com/winlator/container/Container.java"
-            "app/src/main/java/com/winlator/core/AppUtils.java"
-            "app/src/main/java/com/winlator/core/FileUtils.java"
-            "app/src/main/java/com/winlator/core/LogCaptureHelper.java"
-            "app/src/main/java/com/winlator/core/WinFGConfig.java"
-            "app/src/main/java/com/winlator/widget/EnvVarsView.java"
-            "app/src/main/java/com/winlator/winhandler/WinHandler.java"
-            "app/src/main/java/com/winlator/ContainerDetailFragment.java"
-            "app/src/main/res/layout/container_detail_fragment.xml"
-            "app/src/main/res/values/arrays.xml"
-            "app/src/main/res/values-zh/arrays.xml"
-            "app/src/main/cpp/gladiorenderer/CMakeLists.txt"
-          )
-          OURS_DIRS=("docs" ".github" "scripts")
-          is_ours() {
-            local f="$1" e d
-            for e in "${OURS_FILES[@]}"; do [ "$e" = "$f" ] && return 0; done
-            for d in "${OURS_DIRS[@]}"; do case "$f" in "$d"/*) return 0 ;; esac; done
-            return 1
-          }
-          # 找出上游本次更新中触及的保护文件
-          CHANGED=$(git diff --name-only HEAD^1 HEAD^2 2>/dev/null || git diff --name-only HEAD~1 HEAD 2>/dev/null || true)
-          OVERLAP=""
-          while IFS= read -r f; do
-            [ -z "$f" ] && continue
-            if is_ours "$f"; then OVERLAP="${OVERLAP}- ${f}\n"; fi
-          done <<< "$CHANGED"
-          if [ -n "$OVERLAP" ]; then
-            echo "has_overlap=true" >> $GITHUB_OUTPUT
-            echo -e "$OVERLAP" > upstream_overlap.txt
-            echo "::warning::上游更新了保护区域文件，合并时保留了我们的版本，上游这些文件的更新被跳过，如需上游版本请人工核对"
-            echo -e "上游更新了以下保护文件（已保留我们的版本）:\n$OVERLAP"
-          else
-            echo "has_overlap=false" >> $GITHUB_OUTPUT
-            echo "上游未触及保护区域，所有更新完整合入"
-          fi
-
-      - name: 推送合并结果
-        if: steps.check.outputs.up_to_date == 'false'
-        run: |
-          echo "=== 推送前诊断 ==="
-          git log --oneline -3
-          # 获取远程 main 最新状态
-          git fetch origin main 2>&1 || echo "(fetch origin 失败)"
-          LOCAL_HEAD=$(git rev-parse HEAD)
-          REMOTE_HEAD=$(git rev-parse origin/main 2>/dev/null || echo "unknown")
-          echo "本地 HEAD:  ${LOCAL_HEAD:0:10}"
-          echo "远程 main: ${REMOTE_HEAD:0:10}"
-
-          # Why: 用户可能在 workflow 运行期间手动改了 main（网页直接编辑/上传），
-          #      导致 CI 的本地提交落后于远程 → push 报 non-fast-forward。
-          # What: 若本地不是远程的后代，先 rebase 到远程最新，再 push。
-          # How:  如果不想自动 rebase，删掉下面这个 if 块即可（但会再次 non-fast-forward 失败）。
-          if [ "$REMOTE_HEAD" != "unknown" ] && [ "$LOCAL_HEAD" != "$REMOTE_HEAD" ]; then
-            if git merge-base --is-ancestor origin/main HEAD 2>/dev/null; then
-              echo "本地领先远程（可 fast-forward），直接 push"
-            else
-              echo "::warning::检测到远程 main 有本地没有的新提交（可能你手动改过 main），先 rebase 再 push"
-              git pull --rebase origin main 2>&1 || {
-                echo "::error::rebase 失败（远程改动与本地冲突），已中止，请人工处理"
-                git rebase --abort 2>/dev/null || true
-                exit 1
-              }
-              echo "rebase 完成，最新提交:"
-              git log --oneline -3
-            fi
-          fi
-
-          echo "=== 执行 git push origin main ==="
-          # 捕获 git push 的原始错误，输出到注解（未登录也能在 Annotations 看到）
-          PUSH_OUT=$(git push origin main 2>&1) && {
-            echo "$PUSH_OUT"
-            echo "推送成功 ✓"
-          } || {
-            echo "$PUSH_OUT"
-            echo ""
-            echo "::error::========== git push 原始错误 =========="
-            echo "$PUSH_OUT" | while IFS= read -r line; do
-              [ -n "$line" ] && echo "::error::$line"
-            done
-            echo "::error::======================================"
-            echo "::error::排查：hint: Updates were rejected（non-fast-forward）→ 已自动 rebase 处理；"
-            echo "::error::排查：403/denied → 分支保护未删干净（Settings→Branches）或 Workflow permissions 不是 Read and write；"
-            echo "::error::排查：401/Authentication failed → PAT/GITHUB_TOKEN 无效"
-            exit 1
-          }
 
       # ===== win-fg 帧生成引擎上游跟踪 =====
       - name: 检测 win-fg 上游版本
@@ -336,16 +207,77 @@ jobs:
             echo "win-fg 有新版本 $WINFG_LATEST。"
           else
             echo "has_update=false" >> $GITHUB_OUTPUT
-            echo "win-fg 已是最新（$WINFG_LATEST）。"
+            echo "win-fg 已是最新（${WINFG_LATEST:-v0.3.0}）。"
           fi
 
+      # ===== 判断是否需要构建 =====
+      - name: 判断是否需要构建发布
+        id: need
+        run: |
+          NEED="false"
+          [ "${{ steps.check.outputs.up_to_date }}" = "false" ] && NEED="true"
+          [ "${{ steps.winfg-check.outputs.has_update }}" = "true" ] && NEED="true"
+          [ "${{ github.event.inputs.force_build }}" = "true" ] && NEED="true"
+          echo "need_build=$NEED" >> $GITHUB_OUTPUT
+          if [ "$NEED" = "true" ]; then
+            echo "→ 需要构建发布"
+          else
+            echo "→ 无需构建"
+          fi
+
+      # ===== 推送合并结果（含 non-fast-forward 自动处理）=====
+      - name: 推送合并结果
+        if: steps.need.outputs.need_build == 'true' && steps.check.outputs.up_to_date == 'false'
+        run: |
+          echo "=== 推送前诊断 ==="
+          git log --oneline -3
+          git fetch origin main 2>&1 || echo "(fetch origin 失败)"
+          LOCAL_HEAD=$(git rev-parse HEAD)
+          REMOTE_HEAD=$(git rev-parse origin/main 2>/dev/null || echo "unknown")
+          echo "本地 HEAD:  ${LOCAL_HEAD:0:10}"
+          echo "远程 main: ${REMOTE_HEAD:0:10}"
+
+          # Why: 用户可能在 workflow 运行期间手动改了 main（网页直接编辑/上传），
+          #      导致 CI 的本地提交落后于远程 → push 报 non-fast-forward。
+          if [ "$REMOTE_HEAD" != "unknown" ] && [ "$LOCAL_HEAD" != "$REMOTE_HEAD" ]; then
+            if git merge-base --is-ancestor origin/main HEAD 2>/dev/null; then
+              echo "本地领先远程（可 fast-forward），直接 push"
+            else
+              echo "::warning::检测到远程 main 有本地没有的新提交（可能你手动改过 main），先 rebase 再 push"
+              git pull --rebase origin main 2>&1 || {
+                echo "::error::rebase 失败（远程改动与本地冲突），已中止，请人工处理"
+                git rebase --abort 2>/dev/null || true
+                exit 1
+              }
+              echo "rebase 完成，最新提交:"
+              git log --oneline -3
+            fi
+          fi
+
+          echo "=== 执行 git push origin main ==="
+          PUSH_OUT=$(git push origin main 2>&1) && {
+            echo "$PUSH_OUT"
+            echo "推送成功 ✓"
+          } || {
+            echo "$PUSH_OUT"
+            echo "::error::========== git push 原始错误 =========="
+            echo "$PUSH_OUT" | while IFS= read -r line; do
+              [ -n "$line" ] && echo "::error::$line"
+            done
+            echo "::error::======================================"
+            echo "::error::排查：hint: Updates were rejected（non-fast-forward）→ 已自动 rebase 处理；"
+            echo "::error::排查：403/denied → 分支保护未删干净（Settings→Branches）或 Workflow permissions 不是 Read and write；"
+            echo "::error::排查：401/Authentication failed → GITHUB_TOKEN 无效"
+            exit 1
+          }
+
+      # ===== 更新 win-fg 版本记录 =====
       - name: 更新 win-fg 版本记录
-        if: steps.winfg-check.outputs.has_update == 'true'
+        if: steps.need.outputs.need_build == 'true' && steps.winfg-check.outputs.has_update == 'true'
         run: |
           echo "${{ steps.winfg-check.outputs.winfg_version }}" > .winfg-version
           git add .winfg-version
           git commit -m "chore: bump win-fg to ${{ steps.winfg-check.outputs.winfg_version }} (auto-detected upstream release)"
-          # push 前先同步远程，避免 non-fast-forward
           git fetch origin main 2>&1 || true
           if ! git merge-base --is-ancestor origin/main HEAD 2>/dev/null; then
             echo "远程 main 有新提交，先 rebase"
@@ -354,35 +286,191 @@ jobs:
           git push origin main 2>&1 || { echo "::error::push 失败（见上）"; exit 1; }
           echo "win-fg 版本记录已更新并推送 ✓"
 
-      # ===== 自动发布（全自动模式）=====
-      # Why: 上游或 win-fg 有更新时，自动打 tag 并触发 build-coexist 发布。
-      # What: tag 名含上游版本 + win-fg 版本 + 时间戳，保证唯一且信息完整。
-      #       用 GITHUB_TOKEN push tag（不会触发其他 workflow），再通过 API 显式触发
-      #       build-coexist 的 workflow_dispatch——这是唯一可靠的跨 workflow 触发方式，
-      #       不依赖 PAT（PAT 无效时 GITHUB_TOKEN push tag 不会触发构建）。
-      # How:  把 AUTO_RELEASE 改为 'false' 即禁用自动发布，改为手动打 tag。
-      - name: 自动打 tag 并触发构建发布
-        id: auto-tag
-        if: env.AUTO_RELEASE == 'true' && (steps.check.outputs.up_to_date == 'false' || steps.winfg-check.outputs.has_update == 'true')
+      # ============================================================
+      # ================= 以下为构建 + 发布步骤 ====================
+      # ============================================================
+      - name: 安装依赖
+        if: steps.need.outputs.need_build == 'true'
         run: |
-          # 读取上游版本号（build.gradle 可能是占位符，用默认值兜底）
+          pip install zstandard
+          sudo apt-get update -qq && sudo apt-get install -y -qq aapt apksigner unzip 2>/dev/null || true
+
+      - name: 读取共存配置
+        if: steps.need.outputs.need_build == 'true'
+        id: config
+        run: |
+          chmod +x scripts/apply-config.sh
+          bash scripts/apply-config.sh coexist.properties app/build.gradle
+
+      - name: 拉取 win-fg 最新 release（帧生成引擎，MIT）
+        if: steps.need.outputs.need_build == 'true'
+        run: |
+          # Why: win-fg 是独立 Vulkan 帧生成 layer，与 winlator 解耦。
+          #      不 fork 上游源码，构建时自动拉取官方最新 release 预编译 .so，
+          #      零编译、零维护、自动跟随上游版本。
+          # What: 下载 libwin_fg.so + layer manifest 到 assets/winfg/，
+          #      修正 manifest library_path 为 guest 绝对路径。
+          # How:  删除本步骤即回退到无帧生成版本。
+          mkdir -p app/src/main/assets/winfg
+          curl -fsSL -o app/src/main/assets/winfg/libwin_fg.so \
+            "https://github.com/The412Banner/win-fg/releases/latest/download/libwin_fg.so" \
+            || { echo "::error::libwin_fg.so 下载失败"; exit 1; }
+          curl -fsSL -o app/src/main/assets/winfg/VkLayer_win_framegen.json \
+            "https://github.com/The412Banner/win-fg/releases/latest/download/VkLayer_win_framegen.json" \
+            || { echo "::error::layer manifest 下载失败"; exit 1; }
+          python3 -c "
+          import json
+          p='app/src/main/assets/winfg/VkLayer_win_framegen.json'
+          d=json.load(open(p))
+          d['layer']['library_path']='/usr/lib/libwin_fg.so'
+          json.dump(d, open(p,'w'), indent=4)
+          "
+          ls -lh app/src/main/assets/winfg/
+          test -s app/src/main/assets/winfg/libwin_fg.so || { echo "::error::libwin_fg.so 为空"; exit 1; }
+          WINFG_TAG=$(curl -sI "https://github.com/The412Banner/win-fg/releases/latest/download/libwin_fg.so" \
+            | grep -i '^location:' | sed 's#.*/download/\([^/]*\)/.*#\1#' | tr -d '\r')
+          echo "WINFG_VERSION=${WINFG_TAG:-unknown}" >> $GITHUB_ENV
+          echo "win-fg 版本: ${WINFG_TAG:-unknown}"
+
+      - name: 对 assets 做等长包名替换
+        if: steps.need.outputs.need_build == 'true'
+        run: |
+          python3 scripts/patch-assets.py --config coexist.properties --assets-dir app/src/main/assets
+
+      - name: 诊断：确认 assets 未丢失
+        if: steps.need.outputs.need_build == 'true'
+        run: |
+          echo "=== assets 目录大小 ==="
+          du -sh app/src/main/assets/
+          echo "=== rootfs.tzst ==="
+          ls -lh app/src/main/assets/rootfs.tzst
+          echo "=== win-fg 帧生成引擎 ==="
+          ls -lh app/src/main/assets/winfg/
+          echo "=== build.gradle 关键行 ==="
+          grep -E "applicationId|versionCode|versionName" app/build.gradle
+
+      - name: 校验 gradle.properties
+        if: steps.need.outputs.need_build == 'true'
+        run: |
+          cat gradle.properties
+          grep -nE 'falseorg|trueorg|falsetrue' gradle.properties && { echo "::error::gradle.properties 属性粘连"; exit 1; } || true
+
+      - name: Set up JDK
+        if: steps.need.outputs.need_build == 'true'
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: 'temurin'
+          cache: 'gradle'
+
+      - name: Setup Android SDK
+        if: steps.need.outputs.need_build == 'true'
+        uses: android-actions/setup-android@v3
+
+      - name: 安装 NDK 和 CMake
+        if: steps.need.outputs.need_build == 'true'
+        run: sdkmanager --install "ndk;${{ env.NDK_VERSION }}" "cmake;3.22.1"
+
+      - name: 准备签名 keystore
+        if: steps.need.outputs.need_build == 'true'
+        id: keystore
+        run: |
+          if [ -n "${{ secrets.KEYSTORE_BASE64 }}" ]; then
+            echo "使用自定义签名"
+            echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > custom.keystore
+            echo "keystore_path=$PWD/custom.keystore" >> $GITHUB_OUTPUT
+            echo "keystore_pass=${{ secrets.KEYSTORE_PASSWORD }}" >> $GITHUB_OUTPUT
+            echo "key_alias=${{ secrets.KEY_ALIAS }}" >> $GITHUB_OUTPUT
+            echo "key_pass=${{ secrets.KEY_PASSWORD }}" >> $GITHUB_OUTPUT
+          else
+            echo "使用 debug 签名"
+            keytool -genkey -v -keystore debug.keystore \
+              -alias androiddebugkey \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -storepass android -keypass android \
+              -dname "CN=Debug, OU=Debug, O=Debug, L=Debug, ST=Debug, C=US"
+            echo "keystore_path=$PWD/debug.keystore" >> $GITHUB_OUTPUT
+            echo "keystore_pass=android" >> $GITHUB_OUTPUT
+            echo "key_alias=androiddebugkey" >> $GITHUB_OUTPUT
+            echo "key_pass=android" >> $GITHUB_OUTPUT
+          fi
+
+      - name: 构建 Release APK
+        if: steps.need.outputs.need_build == 'true'
+        run: |
+          chmod +x gradlew
+          set +e
+          ./gradlew assembleRelease --no-daemon --stacktrace \
+            -Pandroid.injected.signing.store.file=${{ steps.keystore.outputs.keystore_path }} \
+            -Pandroid.injected.signing.store.password=${{ steps.keystore.outputs.keystore_pass }} \
+            -Pandroid.injected.signing.key.alias=${{ steps.keystore.outputs.key_alias }} \
+            -Pandroid.injected.signing.key.password=${{ steps.keystore.outputs.key_pass }} > build.log 2>&1
+          GRADLE_EXIT=$?
+          echo "Gradle 退出码: $GRADLE_EXIT"
+          grep -nE "^e: |error:|FAILED|FAILURE:|What went wrong|> Task .*FAILED|Caused by:|Execution failed|ninja: error|clang.*error" build.log | head -40 | while IFS= read -r line; do
+            echo "::error::$line"
+          done
+          echo "========== 最后 80 行 =========="
+          tail -80 build.log
+          if [ $GRADLE_EXIT -ne 0 ]; then
+            echo "::error::Gradle 构建失败，退出码 $GRADLE_EXIT"
+            exit 1
+          fi
+
+      - name: 确认 APK
+        if: steps.need.outputs.need_build == 'true'
+        run: |
+          ls -lh app/build/outputs/apk/release/
+          APK=$(ls app/build/outputs/apk/release/*.apk | head -1)
+          echo "APK_PATH=$APK" >> $GITHUB_ENV
+
+      - name: 重命名 APK
+        if: steps.need.outputs.need_build == 'true'
+        run: |
+          SHA=$(git rev-parse --short HEAD)
+          TS=$(date +%Y%m%d-%H%M%S)
+          mv "$APK_PATH" "Winlator-coexist-${SHA}-${TS}.apk"
+          ls -lh *.apk
+          echo "APK_FINAL=$(ls *.apk | head -1)" >> $GITHUB_ENV
+
+      - name: 发布前静态自检
+        if: steps.need.outputs.need_build == 'true'
+        run: |
+          chmod +x scripts/pre-release-check.sh
+          bash scripts/pre-release-check.sh "$APK_FINAL" "${{ env.APP_ID }}"
+
+      - name: 生成更新日志
+        if: steps.need.outputs.need_build == 'true'
+        run: |
+          chmod +x scripts/generate-changelog.sh
+          bash scripts/generate-changelog.sh RELEASE_NOTES.md "${{ env.APP_ID }}"
+
+      - name: 上传 APK（artifact）
+        if: steps.need.outputs.need_build == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: winlator-coexist-apk
+          path: "*.apk"
+          retention-days: 30
+
+      # ===== 打 tag（构建成功后，失败不产生孤儿 tag）=====
+      - name: 打 tag 并推送
+        if: steps.need.outputs.need_build == 'true'
+        id: tag
+        run: |
           VER=$(grep -oE 'versionName "[^"]+"' app/build.gradle 2>/dev/null | head -1 | sed 's/.*"\(.*\)"/\1/')
           [ -z "$VER" ] || [ "$VER" = "__VERSION_NAME__" ] && VER="11.2.cn.03"
           WFG=$(cat .winfg-version 2>/dev/null || echo "v0.3.0")
-          # 时间戳保证 tag 唯一
           TS=$(date +%Y%m%d-%H%M)
           TAG="v${VER}-coexist-winfg-${WFG}-${TS}"
-          # 极端情况：同一分钟内重复运行，追加秒数避免冲突
+          # 同 tag 已存在则追加秒数（防冲突）
           if git ls-remote --tags origin "$TAG" 2>/dev/null | grep -q "$TAG"; then
             TAG="${TAG}-$(date +%S)"
           fi
           git tag "$TAG"
-
-          # 用 GITHUB_TOKEN push tag（GITHUB_TOKEN push 不会触发其他 workflow，避免重复构建）
-          echo "=== 推送 tag: $TAG ==="
-          TAG_OUT=$(git push "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "$TAG" 2>&1) && {
+          TAG_OUT=$(git push origin "$TAG" 2>&1) && {
             echo "$TAG_OUT"
-            echo "tag 推送成功 ✓"
+            echo "已打 tag: $TAG"
           } || {
             echo "$TAG_OUT"
             echo "::error::推送 tag 失败："
@@ -391,26 +479,24 @@ jobs:
             done
             exit 1
           }
+          echo "tag_name=$TAG" >> $GITHUB_OUTPUT
 
-          # 通过 API 显式触发 build-coexist 的 workflow_dispatch（ref=tag）
-          # GITHUB_TOKEN 可以触发同仓库的 workflow_dispatch，不受"不触发事件"规则限制
-          echo "=== 触发 build-coexist 构建发布（workflow_dispatch）==="
-          HTTP_CODE=$(curl -s -o /tmp/trigger_resp.txt -w "%{http_code}" -X POST \
-            -H "Authorization: token ${GITHUB_TOKEN}" \
-            -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/workflows/build-coexist.yml/dispatches" \
-            -d "{\"ref\":\"refs/tags/${TAG}\"}")
-          if [ "$HTTP_CODE" = "204" ]; then
-            echo "build-coexist 构建已触发 ✓（约 5 分钟后完成，请到 Actions 页面查看）"
-          else
-            echo "::error::触发 build-coexist 失败，HTTP $HTTP_CODE"
-            cat /tmp/trigger_resp.txt 2>/dev/null | head -20
-            exit 1
-          fi
-
-          # 输出给后续步骤
-          echo "auto_tag=$TAG" >> $GITHUB_OUTPUT
+      # ===== 发布 Release =====
+      - name: 发布 Release
+        if: steps.need.outputs.need_build == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: "*.apk"
+          name: "Winlator 共存版 ${{ env.VERSION_NAME }} (${{ env.APP_ID }}) + win-fg ${{ env.WINFG_VERSION }}"
+          tag_name: ${{ steps.tag.outputs.tag_name }}
+          draft: false
+          # 自检全过无警告 → 正式版（自动 Latest）；有跳过项 → pre-release（需人工验证）
+          prerelease: ${{ env.SELF_CHECK_NEED_MANUAL == '1' }}
+          body_path: RELEASE_NOTES.md
+          make_latest: ${{ env.SELF_CHECK_NEED_MANUAL == '0' }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: 无更新时提示
-        if: steps.check.outputs.up_to_date == 'true' && steps.winfg-check.outputs.has_update == 'false'
-        run: echo "上游与 win-fg 均已是最新，无需构建发布。"
+        if: steps.need.outputs.need_build == 'false'
+        run: echo "上游与 win-fg 均已是最新，无需构建发布。如需强制构建，请在手动运行时勾选 force_build。"
