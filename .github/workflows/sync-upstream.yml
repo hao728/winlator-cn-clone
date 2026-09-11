@@ -32,6 +32,7 @@ env:
 
 permissions:
   contents: write
+  actions: write    # 触发 build-coexist workflow_dispatch 需要 actions: write
 
 jobs:
   sync:
@@ -103,17 +104,27 @@ jobs:
             echo "上游有新提交，开始合并。"
           fi
 
-      - name: 合并上游（冲突时保留我们的共存改动）
+      - name: 合并上游（区域保护：定制文件/目录永不被上游覆盖）
         if: steps.check.outputs.up_to_date == 'false'
         run: |
           git checkout main
 
-          # 我们为共存/win-fg 改过的文件（冲突时保留我们的版本）
-          # 【重要】新增了需要保留的自定义文件时，记得加入此列表
-          COEXIST_FILES=(
+          # ============================================================
+          # 【区域保护策略】冲突时以下文件/目录永远保留我们的版本
+          #   OURS_FILES = 精确文件路径（新增定制文件时加这里）
+          #   OURS_DIRS  = 整个目录保护（目录下任何文件冲突都保留 ours）
+          #   不在保护范围内的文件冲突 → 采用上游新版（让上游更新生效）
+          # ============================================================
+          OURS_FILES=(
+            # --- 项目治理/文档（我们自己写的，绝不能被上游覆盖）---
+            "README.md"
+            "CHANGELOG.md"
+            "coexist.properties"
+            # --- 构建配置（共存版定制）---
             "app/build.gradle"
-            "app/src/main/AndroidManifest.xml"
             "gradle.properties"
+            "app/src/main/AndroidManifest.xml"
+            # --- 共存核心 Java 源码 ---
             "app/src/main/java/com/winlator/container/Container.java"
             "app/src/main/java/com/winlator/core/AppUtils.java"
             "app/src/main/java/com/winlator/core/FileUtils.java"
@@ -122,35 +133,49 @@ jobs:
             "app/src/main/java/com/winlator/widget/EnvVarsView.java"
             "app/src/main/java/com/winlator/winhandler/WinHandler.java"
             "app/src/main/java/com/winlator/ContainerDetailFragment.java"
+            # --- win-fg UI 资源 ---
             "app/src/main/res/layout/container_detail_fragment.xml"
             "app/src/main/res/values/arrays.xml"
             "app/src/main/res/values-zh/arrays.xml"
+            # --- native 共存改动 ---
             "app/src/main/cpp/gladiorenderer/CMakeLists.txt"
           )
-          contains() {
-            local e
-            for e in "${COEXIST_FILES[@]}"; do [ "$e" = "$1" ] && return 0; done
+          # 整个目录保护（目录下所有文件冲突时都保留 ours）
+          OURS_DIRS=(
+            "docs"
+            ".github"
+            "scripts"
+          )
+          # 上游有但我们明确不要的文件（merge 后自动删除）
+          EXCLUDE_FILES=(
+            ".cnb.yml"
+          )
+
+          # 判断文件是否属于保护范围（精确匹配 或 目录前缀匹配）
+          is_ours() {
+            local f="$1" e d
+            for e in "${OURS_FILES[@]}"; do [ "$e" = "$f" ] && return 0; done
+            for d in "${OURS_DIRS[@]}"; do
+              case "$f" in "$d"/*) return 0 ;; esac
+            done
             return 1
           }
 
           # Why: 清洗历史后 main 是孤儿提交，与上游无共同祖先，
           #      普通 git merge 会报 "refusing to merge unrelated histories"（exit 128）。
           #      必须加 --allow-unrelated-histories；合并成功后共同祖先建立，后续正常。
-          # What: 冲突时逐文件处理——共存文件保留 ours，其余文件采用 theirs（让上游更新生效）。
-          #      之前用 -X ours 会连上游对未改文件的新版本也丢弃，这是错误的。
-          # How:  删除 --allow-unrelated-histories 即可回退（但清洗历史后会导致合并失败）。
           if git merge upstream/main --no-edit --allow-unrelated-histories; then
             echo "=== 上游合并成功（无冲突）==="
           else
-            echo "=== merge 有冲突，逐文件处理 ==="
+            echo "=== merge 有冲突，按区域保护策略逐文件处理 ==="
             git diff --name-only --diff-filter=U | while read f; do
               # 用 stage 3 判断上游版本是否存在（比 theirs: 前缀更可靠）
               if git ls-files -u "$f" | awk '{print $3}' | grep -q '^3$'; then
-                if contains "$f"; then
-                  echo "保留共存改动 (ours): $f"
+                if is_ours "$f"; then
+                  echo "🛡 保留我们的版本 (ours): $f"
                   git checkout --ours "$f"
                 else
-                  echo "采用上游新版 (theirs): $f"
+                  echo "⬆ 采用上游新版 (theirs): $f"
                   git checkout --theirs "$f"
                 fi
               else
@@ -162,38 +187,49 @@ jobs:
             git commit --no-edit || echo "无变更可提交，跳过"
           fi
 
-          # ===== 关键：保护 workflow 目录（丢弃上游的，保留我们的定制）=====
-          # Why: 上游也有 .github/workflows/（android-ci.yml、build-native.yml），
-          #      merge 会把上游版本合入 → push 时 GitHub 拒绝：
-          #      "refusing to allow a GitHub App to create or update workflow without workflows permission"
-          # What: merge 后用 ORIG_HEAD（merge 前的 HEAD=我们的版本）恢复 workflow 目录，
-          #       并删除上游新增的 workflow 文件，确保 push 不涉及 workflow 文件变更。
-          # How:  如未来需要让上游 workflow 合入，删除本段即可（但需给 workflow 加 workflows: write 权限）。
-          echo "=== 保护 .github/workflows（保留我们的定制，丢弃上游的）==="
-          git checkout ORIG_HEAD -- .github/workflows/ 2>/dev/null || echo "(workflow 目录恢复完成或无需恢复)"
-          git diff --cached --name-only --diff-filter=A -- .github/workflows/ | while read -r f; do
-            echo "丢弃上游新增 workflow: $f"
-            git rm -f --cached "$f" 2>/dev/null || git rm -f "$f" 2>/dev/null || true
+          # ===== 保护区域兜底：merge 后强制恢复（防止无冲突自动合入污染）=====
+          # Why: 即使没有冲突，上游对 .github/workflows 的改动也会自动合入，
+          #      导致 push 被 GitHub 拒绝（GitHub App 不能改 workflow）或覆盖我们的 CI。
+          # What: 用 ORIG_HEAD（merge 前的 HEAD=我们的版本）恢复所有保护目录，
+          #       并删除上游在保护目录里新增的文件。
+          echo "=== 保护区域兜底恢复 ==="
+          for d in "${OURS_DIRS[@]}"; do
+            # 1) 恢复 ORIG_HEAD 中已有的文件为我们的版本
+            git checkout ORIG_HEAD -- "$d" 2>/dev/null && echo "🛡 恢复目录: $d/" || true
+            # 2) 删除上游在保护目录新增的文件（同时兼容"已commit"和"冲突处理中"两种状态）
+            { git diff --name-only --diff-filter=A ORIG_HEAD HEAD -- "$d/" 2>/dev/null
+              git diff --cached --name-only --diff-filter=A -- "$d/" 2>/dev/null
+            } | sort -u | while read -r f; do
+              [ -n "$f" ] && echo "🗑 丢弃上游新增: $f" && git rm -f "$f" 2>/dev/null || true
+            done
           done
-          git add .github/workflows/ 2>/dev/null || true
-          # merge 无冲突时已自动 commit → 用 amend 把恢复合入；有冲突未 commit → 直接 commit
+
+          # ===== 删除上游有但我们不要的文件（如 .cnb.yml）=====
+          for x in "${EXCLUDE_FILES[@]}"; do
+            if [ -f "$x" ] || git ls-files --error-unmatch "$x" >/dev/null 2>&1; then
+              echo "🗑 删除排除文件: $x"
+              git rm -f "$x" 2>/dev/null || rm -f "$x"
+            fi
+          done
+
+          git add -A 2>/dev/null || true
+          # merge 无冲突时已自动 commit → amend；有冲突已 commit → amend；无变化 → 跳过
           if git diff --cached --quiet 2>/dev/null; then
-            echo "workflow 目录无变化，无需提交"
+            echo "保护区域无变化"
           else
             git commit --amend --no-edit 2>/dev/null || git commit --no-edit
-            echo "workflow 目录已恢复为我们的版本 ✓"
+            echo "保护区域已恢复 ✓"
           fi
           git log --oneline -5
 
-      - name: 检测上游是否更新了我们改过的文件
+      - name: 检测上游是否更新了保护区域文件
         if: steps.check.outputs.up_to_date == 'false'
         id: conflict-check
         run: |
-          # 我们为共存改过的文件列表
-          COEXIST_FILES=(
-            "app/build.gradle"
-            "app/src/main/AndroidManifest.xml"
-            "gradle.properties"
+          # 与合并步骤一致的保护文件/目录列表
+          OURS_FILES=(
+            "README.md" "CHANGELOG.md" "coexist.properties"
+            "app/build.gradle" "gradle.properties" "app/src/main/AndroidManifest.xml"
             "app/src/main/java/com/winlator/container/Container.java"
             "app/src/main/java/com/winlator/core/AppUtils.java"
             "app/src/main/java/com/winlator/core/FileUtils.java"
@@ -207,22 +243,28 @@ jobs:
             "app/src/main/res/values-zh/arrays.xml"
             "app/src/main/cpp/gladiorenderer/CMakeLists.txt"
           )
-          # 找出上游本次更新中触及的共存文件
+          OURS_DIRS=("docs" ".github" "scripts")
+          is_ours() {
+            local f="$1" e d
+            for e in "${OURS_FILES[@]}"; do [ "$e" = "$f" ] && return 0; done
+            for d in "${OURS_DIRS[@]}"; do case "$f" in "$d"/*) return 0 ;; esac; done
+            return 1
+          }
+          # 找出上游本次更新中触及的保护文件
           CHANGED=$(git diff --name-only HEAD^1 HEAD^2 2>/dev/null || git diff --name-only HEAD~1 HEAD 2>/dev/null || true)
           OVERLAP=""
-          for f in "${COEXIST_FILES[@]}"; do
-            if echo "$CHANGED" | grep -q "^${f}$"; then
-              OVERLAP="${OVERLAP}- ${f}\n"
-            fi
-          done
+          while IFS= read -r f; do
+            [ -z "$f" ] && continue
+            if is_ours "$f"; then OVERLAP="${OVERLAP}- ${f}\n"; fi
+          done <<< "$CHANGED"
           if [ -n "$OVERLAP" ]; then
             echo "has_overlap=true" >> $GITHUB_OUTPUT
             echo -e "$OVERLAP" > upstream_overlap.txt
-            echo "::warning::上游更新了共存改动文件，合并时保留了我们的版本，上游这些文件的更新可能被覆盖，需人工核对"
-            echo -e "上游更新了以下共存改动文件（合并时保留了我们的版本，上游更新可能被覆盖）:\n$OVERLAP"
+            echo "::warning::上游更新了保护区域文件，合并时保留了我们的版本，上游这些文件的更新被跳过，如需上游版本请人工核对"
+            echo -e "上游更新了以下保护文件（已保留我们的版本）:\n$OVERLAP"
           else
             echo "has_overlap=false" >> $GITHUB_OUTPUT
-            echo "上游未触及共存改动文件，所有更新完整合入"
+            echo "上游未触及保护区域，所有更新完整合入"
           fi
 
       - name: 推送合并结果
