@@ -1,0 +1,1054 @@
+diff --git a/app/src/main/cpp/vortekrenderer/CMakeLists.txt b/app/src/main/cpp/vortekrenderer/CMakeLists.txt
+index 0e7920d..a18b32c 100644
+--- a/app/src/main/cpp/vortekrenderer/CMakeLists.txt
++++ b/app/src/main/cpp/vortekrenderer/CMakeLists.txt
+@@ -3,11 +3,32 @@ cmake_minimum_required(VERSION 3.22.1)
+ project(VortekRenderer)
+ 
+ set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -O2 -Wno-unused-function -Wimplicit-function-declaration -DVK_USE_PLATFORM_ANDROID_KHR")
++# win-fg 是 C++ 代码，需要 C++17
++set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O2 -std=c++17 -DVK_USE_PLATFORM_ANDROID_KHR")
+ 
+ include_directories(include)
+ include_directories(../winlator/include)
++include_directories(../winlator/winfg)
+ include_directories(../libadrenotools/include)
+ 
++# win-fg 版本戳（参考 Bannerlator，用于 logcat 识别链版本）
++set(WINFG_UPSTREAM "v0.3.0")
++set(WINFG_CHAIN_SRC
++    ../winlator/winfg/framegen.cpp
++    ../winlator/winfg/framegen.hpp
++    ../winlator/winfg/record_impl.inc
++    ../winlator/winfg/config.hpp
++    ../winlator/winfg/embedded_shaders.hpp)
++set(WINFG_HASH_INPUT "")
++foreach(f ${WINFG_CHAIN_SRC})
++    file(READ "${f}" _h)
++    string(APPEND WINFG_HASH_INPUT "${_h}")
++endforeach()
++string(SHA256 WINFG_CHAIN_HASH_FULL "${WINFG_HASH_INPUT}")
++string(SUBSTRING "${WINFG_CHAIN_HASH_FULL}" 0 12 WINFG_CHAIN_HASH)
++message(STATUS "win-fg chain: ${WINFG_UPSTREAM} (src ${WINFG_CHAIN_HASH})")
++add_compile_definitions(WINFG_UPSTREAM="${WINFG_UPSTREAM}" WINFG_CHAIN_HASH="${WINFG_CHAIN_HASH}")
++
+ add_library(vortekrenderer SHARED
+             src/main.c
+             src/vk_object.c
+@@ -19,10 +40,13 @@ add_library(vortekrenderer SHARED
+             src/texture_decoder.c
+             src/shader_inspector.c
+             src/async_pipeline_creator.c
+-            src/timeline_semaphore.c)
++            src/timeline_semaphore.c
++            # win-fg native 帧生成（C++）
++            ../winlator/winfg/framegen.cpp
++            ../winlator/winfg/winfg_bridge.cpp)
+ 
+ target_link_libraries(vortekrenderer
+                       adrenotools
+                       winlator
+                       log
+-                      android)
+\ No newline at end of file
++                      android)
+diff --git a/app/src/main/cpp/vortekrenderer/src/main.c b/app/src/main/cpp/vortekrenderer/src/main.c
+index 9218785..d2ef5ab 100644
+--- a/app/src/main/cpp/vortekrenderer/src/main.c
++++ b/app/src/main/cpp/vortekrenderer/src/main.c
+@@ -7,6 +7,7 @@
+ #include "request_handler.h"
+ #include "vulkan_helper.h"
+ #include "jni_utils.h"
++#include "xwindow_swapchain.h"
+ 
+ #include "adrenotools/driver.h"
+ 
+@@ -71,4 +72,38 @@ Java_com_winlator_xenvironment_components_VortekRendererComponent_handleExtraDat
+                                                                                          int requestId,
+                                                                                          int requestLength) {
+     return handleExtraDataRequest((VkContext*)contextPtr, requestId, requestLength);
+-}
+\ No newline at end of file
++}
++
++// ============================================================================
++// win-fg 帧生成 JNI 接口（全局配置，所有 swapchain 共享）
++// Why: 容器运行时菜单只有一个全局开关，简化 Java 层对接。
++// What: 3 个 native 静态方法，修改全局 win-fg 配置。
++// How: 删除以下方法即回退到无帧生成版本。
++// ============================================================================
++
++// 全局配置声明（定义在 xwindow_swapchain.c）
++extern void winfgSetGlobalConfig(int enabled, int multiplier, int model, int preset, float flowScale);
++extern int winfgGetGlobalEnabled();
++
++JNIEXPORT void JNICALL
++Java_com_winlator_xenvironment_components_VortekRendererComponent_nativeSetWinFgEnabled(JNIEnv *env,
++                                                                                        jclass cls,
++                                                                                        jboolean enabled) {
++    winfgSetGlobalConfig(enabled ? 1 : 0, 2, 4, 1, 1.0f);
++}
++
++JNIEXPORT void JNICALL
++Java_com_winlator_xenvironment_components_VortekRendererComponent_nativeSetWinFgConfig(JNIEnv *env,
++                                                                                       jclass cls,
++                                                                                       jint multiplier,
++                                                                                       jint model,
++                                                                                       jint preset,
++                                                                                       jfloat flowScale) {
++    winfgSetGlobalConfig(winfgGetGlobalEnabled(), multiplier, model, preset, flowScale);
++}
++
++JNIEXPORT jboolean JNICALL
++Java_com_winlator_xenvironment_components_VortekRendererComponent_nativeIsWinFgEnabled(JNIEnv *env,
++                                                                                       jclass cls) {
++    return winfgGetGlobalEnabled() ? JNI_TRUE : JNI_FALSE;
++}
+diff --git a/app/src/main/cpp/vortekrenderer/src/request_handler.c b/app/src/main/cpp/vortekrenderer/src/request_handler.c
+index 0e4b6e5..92ea81d 100644
+--- a/app/src/main/cpp/vortekrenderer/src/request_handler.c
++++ b/app/src/main/cpp/vortekrenderer/src/request_handler.c
+@@ -2021,7 +2021,7 @@ void vt_handle_vkCreateSwapchainKHR(VkContext* context) {
+ 
+     XWindowSwapchain* swapchain = NULL;
+     if (createInfo.imageExtent.width == windowSize.width && createInfo.imageExtent.height == windowSize.height) {
+-        swapchain = XWindowSwapchain_create(device, context->graphicsQueueIndex, &createInfo, &context->jmethods, windowId);
++        swapchain = XWindowSwapchain_create(device, context->graphicsQueueIndex, &createInfo, &context->jmethods, windowId, context->physicalDevice);
+         if (!swapchain) result = VK_ERROR_INITIALIZATION_FAILED;
+     }
+     else result = VK_ERROR_SURFACE_LOST_KHR;
+diff --git a/app/src/main/cpp/vortekrenderer/src/vulkan_helper.c b/app/src/main/cpp/vortekrenderer/src/vulkan_helper.c
+index 1469232..fe82a61 100644
+--- a/app/src/main/cpp/vortekrenderer/src/vulkan_helper.c
++++ b/app/src/main/cpp/vortekrenderer/src/vulkan_helper.c
+@@ -126,6 +126,7 @@ void initVulkanDevice(VkContext* context, VkPhysicalDevice physicalDevice, VkDev
+     VkQueueFamilyProperties queueFamilies[queueFamilyCount];
+     vulkanWrapper.vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice, &queueFamilyCount, queueFamilies);
+ 
++    context->physicalDevice = physicalDevice;
+     context->graphicsQueueIndex = 0;
+     for (uint32_t i = 0; i < queueFamilyCount; i++) {
+         if (queueFamilies[i].queueCount > 0 && (queueFamilies[i].queueFlags & VK_QUEUE_GRAPHICS_BIT)) {
+diff --git a/app/src/main/cpp/vortekrenderer/src/xwindow_swapchain.c b/app/src/main/cpp/vortekrenderer/src/xwindow_swapchain.c
+index d94196a..472d27b 100644
+--- a/app/src/main/cpp/vortekrenderer/src/xwindow_swapchain.c
++++ b/app/src/main/cpp/vortekrenderer/src/xwindow_swapchain.c
+@@ -1,5 +1,28 @@
+ #include "xwindow_swapchain.h"
+ #include "vulkan_helper.h"
++#include "winfg_bridge.h"
++
++// ============================================================================
++// 全局 win-fg 配置（所有 swapchain 共享，由 Java 层通过 JNI 设置）
++// Why: 容器运行时菜单只有一个全局开关，per-swapchain 控制会增加 Java 层复杂度。
++// What: XWindowSwapchain_presentImage 时把全局配置同步到当前 swapchain。
++// How: 修改这些变量即修改所有 swapchain 的帧生成行为。
++// ============================================================================
++static int g_winfgEnabled = 0;
++static int g_winfgMultiplier = 2;
++static int g_winfgModel = 4;
++static int g_winfgPreset = 1;
++static float g_winfgFlowScale = 1.0f;
++
++void winfgSetGlobalConfig(int enabled, int multiplier, int model, int preset, float flowScale) {
++    g_winfgEnabled = enabled ? 1 : 0;
++    g_winfgMultiplier = multiplier;
++    g_winfgModel = model;
++    g_winfgPreset = preset;
++    g_winfgFlowScale = flowScale;
++}
++
++int winfgGetGlobalEnabled() { return g_winfgEnabled; }
+ 
+ void getWindowExtent(JMethods* jmethods, int windowId, VkExtent2D* extent) {
+     extent->width = (*jmethods->env)->CallIntMethod(jmethods->env, jmethods->obj, jmethods->getWindowWidth, windowId);
+@@ -110,7 +133,105 @@ VkSurfaceFormatKHR* getSurfaceFormats(uint32_t* formatCount) {
+     return surfaceFormats;
+ }
+ 
+-XWindowSwapchain* XWindowSwapchain_create(VkDevice device, uint32_t graphicsQueueIndex, VkSwapchainCreateInfoKHR* swapchainInfo, JMethods* jmethods, int windowId) {
++// ============================================================================
++// win-fg 辅助函数
++// ============================================================================
++
++static void winfgDestroyResources(XWindowSwapchain* swapchain) {
++    if (!swapchain->device) return;
++    vulkanWrapper.vkDeviceWaitIdle(swapchain->device);
++    if (swapchain->winfgEngine) {
++        winfg_destroy((WinFgEngine*)swapchain->winfgEngine);
++        swapchain->winfgEngine = NULL;
++    }
++    if (swapchain->genView) { vulkanWrapper.vkDestroyImageView(swapchain->device, swapchain->genView, NULL); swapchain->genView = VK_NULL_HANDLE; }
++    if (swapchain->genImage) { vulkanWrapper.vkDestroyImage(swapchain->device, swapchain->genImage, NULL); swapchain->genImage = VK_NULL_HANDLE; }
++    if (swapchain->genMem) { vulkanWrapper.vkFreeMemory(swapchain->device, swapchain->genMem, NULL); swapchain->genMem = VK_NULL_HANDLE; }
++    if (swapchain->cmdBuffer) { vulkanWrapper.vkFreeCommandBuffers(swapchain->device, swapchain->cmdPool, 1, &swapchain->cmdBuffer); swapchain->cmdBuffer = VK_NULL_HANDLE; }
++    if (swapchain->cmdPool) { vulkanWrapper.vkDestroyCommandPool(swapchain->device, swapchain->cmdPool, NULL); swapchain->cmdPool = VK_NULL_HANDLE; }
++    if (swapchain->fence) { vulkanWrapper.vkDestroyFence(swapchain->device, swapchain->fence, NULL); swapchain->fence = VK_NULL_HANDLE; }
++}
++
++static bool winfgEnsureGenImage(XWindowSwapchain* swapchain, uint32_t w, uint32_t h, VkFormat fmt) {
++    if (swapchain->genImage && swapchain->genView) return true;
++    VkDevice dev = swapchain->device;
++
++    VkImageCreateInfo ii = {VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
++    ii.imageType = VK_IMAGE_TYPE_2D; ii.extent = {w, h, 1};
++    ii.mipLevels = 1; ii.arrayLayers = 1; ii.format = fmt;
++    ii.tiling = VK_IMAGE_TILING_OPTIMAL; ii.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
++    // STORAGE: win-fg 写入目标; SAMPLED: 可能被采样; TRANSFER: blit 用
++    ii.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
++               VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
++    ii.samples = VK_SAMPLE_COUNT_1_BIT; ii.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
++    if (vulkanWrapper.vkCreateImage(dev, &ii, NULL, &swapchain->genImage) != VK_SUCCESS) return false;
++
++    VkMemoryRequirements req;
++    vulkanWrapper.vkGetImageMemoryRequirements(dev, swapchain->genImage, &req);
++    VkMemoryAllocateInfo ai = {VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
++    ai.allocationSize = req.size;
++    ai.memoryTypeIndex = getMemoryTypeIndex(req.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
++    if (vulkanWrapper.vkAllocateMemory(dev, &ai, NULL, &swapchain->genMem) != VK_SUCCESS) return false;
++    vulkanWrapper.vkBindImageMemory(dev, swapchain->genImage, swapchain->genMem, 0);
++
++    VkImageViewCreateInfo vi = {VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
++    vi.image = swapchain->genImage; vi.viewType = VK_IMAGE_VIEW_TYPE_2D; vi.format = fmt;
++    vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
++    if (vulkanWrapper.vkCreateImageView(dev, &vi, NULL, &swapchain->genView) != VK_SUCCESS) return false;
++    return true;
++}
++
++static bool winfgEnsureCmdResources(XWindowSwapchain* swapchain) {
++    if (swapchain->cmdPool && swapchain->cmdBuffer && swapchain->fence) return true;
++    VkDevice dev = swapchain->device;
++
++    VkCommandPoolCreateInfo ci = {VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
++    ci.queueFamilyIndex = swapchain->queueFamily;
++    ci.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
++    if (vulkanWrapper.vkCreateCommandPool(dev, &ci, NULL, &swapchain->cmdPool) != VK_SUCCESS) return false;
++
++    VkCommandBufferAllocateInfo ai = {VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
++    ai.commandPool = swapchain->cmdPool; ai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY; ai.commandBufferCount = 1;
++    if (vulkanWrapper.vkAllocateCommandBuffers(dev, &ai, &swapchain->cmdBuffer) != VK_SUCCESS) return false;
++
++    VkFenceCreateInfo fi = {VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
++    fi.flags = VK_FENCE_CREATE_SIGNALED_BIT;
++    if (vulkanWrapper.vkCreateFence(dev, &fi, NULL, &swapchain->fence) != VK_SUCCESS) return false;
++
++    // 获取 graphics queue（win-fg engine 需要真实 VkQueue）
++    vulkanWrapper.vkGetDeviceQueue(dev, swapchain->queueFamily, 0, &swapchain->queue);
++    if (!swapchain->queue) return false;
++    return true;
++}
++
++static void winfgSubmitAndWait(XWindowSwapchain* swapchain) {
++    VkSubmitInfo si = {VK_STRUCTURE_TYPE_SUBMIT_INFO};
++    si.commandBufferCount = 1; si.pCommandBuffers = &swapchain->cmdBuffer;
++    vulkanWrapper.vkResetFences(swapchain->device, 1, &swapchain->fence);
++    vulkanWrapper.vkQueueSubmit(swapchain->queue, 1, &si, swapchain->fence);
++    vulkanWrapper.vkWaitForFences(swapchain->device, 1, &swapchain->fence, VK_TRUE, UINT64_MAX);
++}
++
++static void imgBarrier(VkCommandBuffer cmd, VkImage img, VkImageLayout from, VkImageLayout to,
++                       VkAccessFlags src, VkAccessFlags dst) {
++    VkImageMemoryBarrier b = {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
++    b.oldLayout = from; b.newLayout = to;
++    b.srcAccessMask = src; b.dstAccessMask = dst;
++    b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
++    b.image = img; b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
++    vulkanWrapper.vkCmdPipelineBarrier(cmd,
++        VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
++        0, 0, NULL, 0, NULL, 1, &b);
++}
++
++// ============================================================================
++// XWindowSwapchain 主函数
++// ============================================================================
++
++XWindowSwapchain* XWindowSwapchain_create(VkDevice device, uint32_t graphicsQueueIndex,
++                                          VkSwapchainCreateInfoKHR* swapchainInfo,
++                                          JMethods* jmethods, int windowId,
++                                          VkPhysicalDevice phys) {
+     XWindowSwapchain* swapchain = calloc(1, sizeof(XWindowSwapchain));
+     swapchain->windowId = windowId;
+     swapchain->imageCount = swapchainInfo->minImageCount;
+@@ -119,6 +240,14 @@ XWindowSwapchain* XWindowSwapchain_create(VkDevice device, uint32_t graphicsQueu
+     swapchain->imageUsage = swapchainInfo->imageUsage;
+     memcpy(&swapchain->imageExtent, &swapchainInfo->imageExtent, sizeof(VkExtent2D));
+     swapchain->jmethods = jmethods;
++    swapchain->device = device;
++    swapchain->phys = phys;
++    swapchain->queueFamily = graphicsQueueIndex;
++    swapchain->winfgEnabled = 0;
++    swapchain->winfgMultiplier = 2;
++    swapchain->winfgModel = 4;
++    swapchain->winfgPreset = 1;
++    swapchain->winfgFlowScale = 1.0f;
+ 
+     VkResult result;
+     for (int i = 0; i < swapchain->imageCount; i++) {
+@@ -130,6 +259,7 @@ XWindowSwapchain* XWindowSwapchain_create(VkDevice device, uint32_t graphicsQueu
+     return swapchain;
+ 
+ error:
++    winfgDestroyResources(swapchain);
+     MEMFREE(swapchain->images);
+     MEMFREE(swapchain);
+     return NULL;
+@@ -137,6 +267,7 @@ error:
+ 
+ void XWindowSwapchain_destroy(VkDevice device, XWindowSwapchain* swapchain) {
+     if (!swapchain) return;
++    winfgDestroyResources(swapchain);
+     for (int i = 0; i < swapchain->imageCount; i++) {
+         vulkanWrapper.vkDestroyImage(device, swapchain->images[i].image, NULL);
+         vulkanWrapper.vkFreeMemory(device, swapchain->images[i].memory, NULL);
+@@ -172,6 +303,163 @@ VkResult XWindowSwapchain_acquireNextImage(XWindowSwapchain* swapchain, uint64_t
+ }
+ 
+ void XWindowSwapchain_presentImage(XWindowSwapchain* swapchain) {
++    // 同步全局 win-fg 配置到当前 swapchain
++    if (g_winfgEnabled != swapchain->winfgEnabled ||
++        g_winfgMultiplier != swapchain->winfgMultiplier ||
++        g_winfgModel != swapchain->winfgModel ||
++        g_winfgPreset != swapchain->winfgPreset ||
++        g_winfgFlowScale != swapchain->winfgFlowScale) {
++        swapchain->winfgEnabled = g_winfgEnabled;
++        swapchain->winfgMultiplier = g_winfgMultiplier;
++        swapchain->winfgModel = g_winfgModel;
++        swapchain->winfgPreset = g_winfgPreset;
++        swapchain->winfgFlowScale = g_winfgFlowScale;
++        if (swapchain->winfgEngine) {
++            if (g_winfgEnabled) {
++                winfg_configure((WinFgEngine*)swapchain->winfgEngine,
++                                g_winfgMultiplier, g_winfgModel, g_winfgPreset, g_winfgFlowScale);
++            } else {
++                winfg_reset((WinFgEngine*)swapchain->winfgEngine);
++            }
++        }
++    }
++
++    // --- win-fg 帧生成路径 ---
++    if (swapchain->winfgEnabled && swapchain->phys && swapchain->device) {
++        // 延迟初始化 engine
++        if (!swapchain->winfgEngine) {
++            if (!winfgEnsureCmdResources(swapchain)) {
++                // cmd 资源创建失败，回退到普通 present
++                (*swapchain->jmethods->env)->CallVoidMethod(swapchain->jmethods->env, swapchain->jmethods->obj,
++                                                            swapchain->jmethods->updateWindowContent, swapchain->windowId);
++                return;
++            }
++            swapchain->winfgEngine = winfg_create(VK_NULL_HANDLE, swapchain->phys, swapchain->device,
++                                                   swapchain->queueFamily, swapchain->queue);
++            if (!swapchain->winfgEngine) {
++                // engine 创建失败，禁用 win-fg
++                swapchain->winfgEnabled = 0;
++                (*swapchain->jmethods->env)->CallVoidMethod(swapchain->jmethods->env, swapchain->jmethods->obj,
++                                                            swapchain->jmethods->updateWindowContent, swapchain->windowId);
++                return;
++            }
++            winfg_configure((WinFgEngine*)swapchain->winfgEngine,
++                            swapchain->winfgMultiplier, swapchain->winfgModel,
++                            swapchain->winfgPreset, swapchain->winfgFlowScale);
++        }
++
++        uint32_t w = swapchain->imageExtent.width;
++        uint32_t h = swapchain->imageExtent.height;
++        VkFormat fmt = swapchain->imageFormat;
++
++        // 准备分辨率
++        if (!winfg_prepare((WinFgEngine*)swapchain->winfgEngine, w, h, fmt)) {
++            (*swapchain->jmethods->env)->CallVoidMethod(swapchain->jmethods->env, swapchain->jmethods->obj,
++                                                        swapchain->jmethods->updateWindowContent, swapchain->windowId);
++            return;
++        }
++
++        // 确保 genImage
++        if (!winfgEnsureGenImage(swapchain, w, h, fmt)) {
++            (*swapchain->jmethods->env)->CallVoidMethod(swapchain->jmethods->env, swapchain->jmethods->obj,
++                                                        swapchain->jmethods->updateWindowContent, swapchain->windowId);
++            return;
++        }
++
++        VkImage srcImg = swapchain->images[0].image;
++        WinFgEngine* eng = (WinFgEngine*)swapchain->winfgEngine;
++
++        // --- 第一遍：生成中间帧并显示 ---
++        vulkanWrapper.vkResetCommandBuffer(swapchain->cmdBuffer, 0);
++        VkCommandBufferBeginInfo bi = {VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
++        bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
++        vulkanWrapper.vkBeginCommandBuffer(swapchain->cmdBuffer, &bi);
++
++        // src 可能是 PRESENT_SRC，先 transition 到 GENERAL
++        imgBarrier(swapchain->cmdBuffer, srcImg,
++                   VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_IMAGE_LAYOUT_GENERAL,
++                   VK_ACCESS_MEMORY_READ_BIT, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_TRANSFER_READ_BIT);
++
++        uint32_t generations = winfg_process(eng, swapchain->cmdBuffer, srcImg, w, h);
++
++        if (generations > 0) {
++            // genImage UNDEFINED → GENERAL
++            imgBarrier(swapchain->cmdBuffer, swapchain->genImage,
++                       VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
++                       0, VK_ACCESS_SHADER_WRITE_BIT);
++            winfg_generate(eng, swapchain->cmdBuffer, 0, generations,
++                           swapchain->genImage, swapchain->genView, w, h);
++            // blit genImage → srcImg（覆盖为生成帧）
++            imgBarrier(swapchain->cmdBuffer, swapchain->genImage,
++                       VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
++                       VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT);
++            imgBarrier(swapchain->cmdBuffer, srcImg,
++                       VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
++                       VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_TRANSFER_READ_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
++            VkImageCopy region = {0};
++            region.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
++            region.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
++            region.extent = {w, h, 1};
++            vulkanWrapper.vkCmdCopyImage(swapchain->cmdBuffer,
++                                         swapchain->genImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
++                                         srcImg, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
++            // srcImg → GENERAL（为 Java 显示做准备）
++            imgBarrier(swapchain->cmdBuffer, srcImg,
++                       VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL,
++                       VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_MEMORY_READ_BIT);
++        }
++
++        vulkanWrapper.vkEndCommandBuffer(swapchain->cmdBuffer);
++        winfgSubmitAndWait(swapchain);
++
++        // 显示生成帧（或真实帧，如果 generations==0）
++        (*swapchain->jmethods->env)->CallVoidMethod(swapchain->jmethods->env, swapchain->jmethods->obj,
++                                                    swapchain->jmethods->updateWindowContent, swapchain->windowId);
++
++        // --- 第二遍：恢复真实帧并显示（仅在生成了中间帧时）---
++        if (generations > 0) {
++            vulkanWrapper.vkResetCommandBuffer(swapchain->cmdBuffer, 0);
++            vulkanWrapper.vkBeginCommandBuffer(swapchain->cmdBuffer, &bi);
++            // 从 ring[curr] 恢复真实帧到 srcImg
++            winfg_restore_curr(eng, swapchain->cmdBuffer, srcImg, w, h);
++            vulkanWrapper.vkEndCommandBuffer(swapchain->cmdBuffer);
++            winfgSubmitAndWait(swapchain);
++            // 显示真实帧
++            (*swapchain->jmethods->env)->CallVoidMethod(swapchain->jmethods->env, swapchain->jmethods->obj,
++                                                        swapchain->jmethods->updateWindowContent, swapchain->windowId);
++        }
++        return;
++    }
++
++    // --- 普通 present 路径（win-fg 关闭时）---
+     (*swapchain->jmethods->env)->CallVoidMethod(swapchain->jmethods->env, swapchain->jmethods->obj,
+                                                 swapchain->jmethods->updateWindowContent, swapchain->windowId);
+-}
+\ No newline at end of file
++}
++
++// ============================================================================
++// win-fg 运行时控制（JNI 层调用）
++// ============================================================================
++
++void XWindowSwapchain_setWinFgEnabled(XWindowSwapchain* swapchain, int enabled) {
++    if (!swapchain) return;
++    swapchain->winfgEnabled = enabled ? 1 : 0;
++    if (!enabled && swapchain->winfgEngine) {
++        winfg_reset((WinFgEngine*)swapchain->winfgEngine);
++    }
++}
++
++void XWindowSwapchain_setWinFgConfig(XWindowSwapchain* swapchain, int multiplier, int model, int preset, float flowScale) {
++    if (!swapchain) return;
++    swapchain->winfgMultiplier = multiplier;
++    swapchain->winfgModel = model;
++    swapchain->winfgPreset = preset;
++    swapchain->winfgFlowScale = flowScale;
++    if (swapchain->winfgEngine) {
++        winfg_configure((WinFgEngine*)swapchain->winfgEngine, multiplier, model, preset, flowScale);
++    }
++}
++
++int XWindowSwapchain_isWinFgActive(XWindowSwapchain* swapchain) {
++    if (!swapchain || !swapchain->winfgEnabled) return 0;
++    return swapchain->winfgEngine ? winfg_valid((WinFgEngine*)swapchain->winfgEngine) : 0;
++}
+diff --git a/app/src/main/cpp/winlator/winfg/winfg_bridge.cpp b/app/src/main/cpp/winlator/winfg/winfg_bridge.cpp
+new file mode 100644
+index 0000000..a771553
+--- /dev/null
++++ b/app/src/main/cpp/winlator/winfg/winfg_bridge.cpp
+@@ -0,0 +1,372 @@
++// ============================================================================
++// winfg_bridge.cpp — C++ 实现层
++//
++// 内部包装 winfg::FrameGen + 输入 ring buffer（prev/curr 两帧）。
++// dispatch table 从 vortekrenderer 的全局 vulkanWrapper 填充。
++//
++// 参考：Bannerlator 的 winfg_engine.cpp（同为 native 集成范式）。
++// ============================================================================
++#include "winfg_bridge.h"
++#include "framegen.hpp"
++#include "vk_dispatch.hpp"
++#include "config.hpp"
++#include "log.hpp"
++
++// vortekrenderer 的全局 Vulkan 函数指针表（定义在 main.c）
++extern "C" {
++#include "vulkan_wrapper.h"
++extern VulkanWrapper vulkanWrapper;
++}
++
++#include <algorithm>
++#include <cstring>
++
++namespace {
++
++// 2x 时 alpha=0.35（偏向 prev，减少 HUD 重影，与 win-fg layer 一致）
++// 3x/4x 时均匀分布
++float alphaFor(uint32_t k, uint32_t n) {
++    if (n <= 1) return 0.35f;
++    return (float)(k + 1) / (float)(n + 1);
++}
++
++VkImageMemoryBarrier imgBar(VkImage img, VkImageLayout from, VkImageLayout to,
++                            VkAccessFlags src, VkAccessFlags dst) {
++    VkImageMemoryBarrier b{};
++    b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
++    b.oldLayout = from; b.newLayout = to;
++    b.srcAccessMask = src; b.dstAccessMask = dst;
++    b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
++    b.image = img;
++    b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
++    return b;
++}
++
++// 从 vulkanWrapper 填充 win-fg 的 dispatch table
++bool fillDispatch(winfg::DeviceDispatch& dd, winfg::InstanceDispatch& id) {
++    // Instance-level
++    id.GetInstanceProcAddr = vulkanWrapper.vkGetInstanceProcAddr;
++    id.DestroyInstance = vulkanWrapper.vkDestroyInstance;
++    id.GetPhysicalDeviceMemoryProperties = vulkanWrapper.vkGetPhysicalDeviceMemoryProperties;
++    id.GetPhysicalDeviceQueueFamilyProperties = vulkanWrapper.vkGetPhysicalDeviceQueueFamilyProperties;
++    id.GetPhysicalDeviceProperties = vulkanWrapper.vkGetPhysicalDeviceProperties;
++    id.GetPhysicalDeviceProperties2 = vulkanWrapper.vkGetPhysicalDeviceProperties2;
++
++    // Device-level（win-fg chain 实际调用的子集）
++    dd.GetDeviceProcAddr = vulkanWrapper.vkGetDeviceProcAddr;
++    dd.DestroyDevice = vulkanWrapper.vkDestroyDevice;
++    dd.GetDeviceQueue = vulkanWrapper.vkGetDeviceQueue;
++    dd.QueueSubmit = vulkanWrapper.vkQueueSubmit;
++    dd.QueueWaitIdle = vulkanWrapper.vkQueueWaitIdle;
++    dd.DeviceWaitIdle = vulkanWrapper.vkDeviceWaitIdle;
++    dd.CreateImage = vulkanWrapper.vkCreateImage;
++    dd.DestroyImage = vulkanWrapper.vkDestroyImage;
++    dd.CreateImageView = vulkanWrapper.vkCreateImageView;
++    dd.DestroyImageView = vulkanWrapper.vkDestroyImageView;
++    dd.AllocateMemory = vulkanWrapper.vkAllocateMemory;
++    dd.FreeMemory = vulkanWrapper.vkFreeMemory;
++    dd.BindImageMemory = vulkanWrapper.vkBindImageMemory;
++    dd.GetImageMemoryRequirements = vulkanWrapper.vkGetImageMemoryRequirements;
++    dd.CreateBuffer = vulkanWrapper.vkCreateBuffer;
++    dd.DestroyBuffer = vulkanWrapper.vkDestroyBuffer;
++    dd.GetBufferMemoryRequirements = vulkanWrapper.vkGetBufferMemoryRequirements;
++    dd.BindBufferMemory = vulkanWrapper.vkBindBufferMemory;
++    dd.MapMemory = vulkanWrapper.vkMapMemory;
++    dd.UnmapMemory = vulkanWrapper.vkUnmapMemory;
++    dd.CreateSampler = vulkanWrapper.vkCreateSampler;
++    dd.DestroySampler = vulkanWrapper.vkDestroySampler;
++    dd.CreateShaderModule = vulkanWrapper.vkCreateShaderModule;
++    dd.DestroyShaderModule = vulkanWrapper.vkDestroyShaderModule;
++    dd.CreateDescriptorSetLayout = vulkanWrapper.vkCreateDescriptorSetLayout;
++    dd.DestroyDescriptorSetLayout = vulkanWrapper.vkDestroyDescriptorSetLayout;
++    dd.CreatePipelineLayout = vulkanWrapper.vkCreatePipelineLayout;
++    dd.DestroyPipelineLayout = vulkanWrapper.vkDestroyPipelineLayout;
++    dd.CreateComputePipelines = vulkanWrapper.vkCreateComputePipelines;
++    dd.DestroyPipeline = vulkanWrapper.vkDestroyPipeline;
++    dd.CreateDescriptorPool = vulkanWrapper.vkCreateDescriptorPool;
++    dd.DestroyDescriptorPool = vulkanWrapper.vkDestroyDescriptorPool;
++    dd.AllocateDescriptorSets = vulkanWrapper.vkAllocateDescriptorSets;
++    dd.UpdateDescriptorSets = vulkanWrapper.vkUpdateDescriptorSets;
++    dd.ResetDescriptorPool = vulkanWrapper.vkResetDescriptorPool;
++    dd.AllocateCommandBuffers = vulkanWrapper.vkAllocateCommandBuffers;
++    dd.FreeCommandBuffers = vulkanWrapper.vkFreeCommandBuffers;
++    dd.BeginCommandBuffer = vulkanWrapper.vkBeginCommandBuffer;
++    dd.EndCommandBuffer = vulkanWrapper.vkEndCommandBuffer;
++    dd.CmdBindPipeline = vulkanWrapper.vkCmdBindPipeline;
++    dd.CmdBindDescriptorSets = vulkanWrapper.vkCmdBindDescriptorSets;
++    dd.CmdDispatch = vulkanWrapper.vkCmdDispatch;
++    dd.CmdPipelineBarrier = vulkanWrapper.vkCmdPipelineBarrier;
++    dd.CmdCopyImage = vulkanWrapper.vkCmdCopyImage;
++    dd.CmdClearColorImage = vulkanWrapper.vkCmdClearColorImage;
++    dd.CreateFence = vulkanWrapper.vkCreateFence;
++    dd.DestroyFence = vulkanWrapper.vkDestroyFence;
++    dd.WaitForFences = vulkanWrapper.vkWaitForFences;
++    dd.ResetFences = vulkanWrapper.vkResetFences;
++
++    // 校验关键函数非空
++    if (!dd.CreateImage || !dd.CreateImageView || !dd.CreateComputePipelines ||
++        !dd.AllocateMemory || !dd.CmdDispatch || !id.GetPhysicalDeviceMemoryProperties) {
++        WFG_LOGE("bridge: critical Vulkan functions missing in vulkanWrapper");
++        return false;
++    }
++    return true;
++}
++
++struct Slot {
++    VkImage image = VK_NULL_HANDLE;
++    VkDeviceMemory mem = VK_NULL_HANDLE;
++    VkImageView view = VK_NULL_HANDLE;
++    bool valid = false;
++};
++
++} // namespace
++
++// ============================================================================
++// WinFgEngine — 内部实现（C++）
++// ============================================================================
++struct WinFgEngine {
++    winfg::DeviceDispatch dd{};
++    winfg::InstanceDispatch id{};
++    VkPhysicalDevice phys = VK_NULL_HANDLE;
++    VkDevice dev = VK_NULL_HANDLE;
++    uint32_t qf = 0;
++    VkQueue queue = VK_NULL_HANDLE;
++    VkPhysicalDeviceMemoryProperties memProps{};
++
++    winfg::FrameGen fg;
++    winfg::Config cfg;
++    bool unavailable = false;
++
++    Slot ring[2];       // prev/curr 输入 ring
++    int currIdx = 0;    // 当前 curr 在 ring 中的索引
++    uint32_t history = 0;  // 已采集帧数（需2帧才能插值）
++    uint32_t gmSlot = 0;   // C1 global-motion SSBO ring slot
++    uint32_t builtW = 0, builtH = 0;
++    VkFormat builtFmt = VK_FORMAT_UNDEFINED;
++
++    uint32_t memType(uint32_t bits, VkMemoryPropertyFlags props) const {
++        for (uint32_t i = 0; i < memProps.memoryTypeCount; i++)
++            if ((bits & (1u << i)) && (memProps.memoryTypes[i].propertyFlags & props) == props)
++                return i;
++        return 0;
++    }
++
++    bool makeSlot(Slot& s, uint32_t w, uint32_t h, VkFormat fmt) {
++        VkImageCreateInfo ii{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
++        ii.imageType = VK_IMAGE_TYPE_2D; ii.extent = {w, h, 1};
++        ii.mipLevels = 1; ii.arrayLayers = 1; ii.format = fmt;
++        ii.tiling = VK_IMAGE_TILING_OPTIMAL; ii.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
++        ii.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
++        ii.samples = VK_SAMPLE_COUNT_1_BIT; ii.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
++        if (dd.CreateImage(dev, &ii, nullptr, &s.image) != VK_SUCCESS) return false;
++        VkMemoryRequirements req; dd.GetImageMemoryRequirements(dev, s.image, &req);
++        VkMemoryAllocateInfo ai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
++        ai.allocationSize = req.size;
++        ai.memoryTypeIndex = memType(req.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
++        if (dd.AllocateMemory(dev, &ai, nullptr, &s.mem) != VK_SUCCESS) { destroySlot(s); return false; }
++        dd.BindImageMemory(dev, s.image, s.mem, 0);
++        VkImageViewCreateInfo vi{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
++        vi.image = s.image; vi.viewType = VK_IMAGE_VIEW_TYPE_2D; vi.format = fmt;
++        vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
++        if (dd.CreateImageView(dev, &vi, nullptr, &s.view) != VK_SUCCESS) { destroySlot(s); return false; }
++        s.valid = false;
++        return true;
++    }
++
++    void destroySlot(Slot& s) {
++        if (s.view) dd.DestroyImageView(dev, s.view, nullptr);
++        if (s.image) dd.DestroyImage(dev, s.image, nullptr);
++        if (s.mem) dd.FreeMemory(dev, s.mem, nullptr);
++        s = Slot{};
++    }
++
++    void destroyRing() {
++        if (dev == VK_NULL_HANDLE || !dd.DeviceWaitIdle) return;
++        if (ring[0].image || ring[1].image) dd.DeviceWaitIdle(dev);
++        destroySlot(ring[0]); destroySlot(ring[1]);
++        history = 0;
++    }
++};
++
++// ============================================================================
++// C 接口实现
++// ============================================================================
++
++extern "C" WinFgEngine* winfg_create(VkInstance /*instance*/,
++                                      VkPhysicalDevice phys,
++                                      VkDevice dev,
++                                      uint32_t queueFamily,
++                                      VkQueue queue) {
++    auto* e = new WinFgEngine();
++    e->phys = phys; e->dev = dev; e->qf = queueFamily; e->queue = queue;
++
++    if (!fillDispatch(e->dd, e->id)) {
++        WFG_LOGE("bridge: dispatch fill failed");
++        delete e;
++        return nullptr;
++    }
++    e->id.GetPhysicalDeviceMemoryProperties(phys, &e->memProps);
++
++    if (!e->fg.init(&e->dd, &e->id, phys, dev, queueFamily, queue)) {
++        WFG_LOGE("bridge: FrameGen::init failed");
++        e->unavailable = true;
++        delete e;
++        return nullptr;
++    }
++    WFG_LOGI("bridge: win-fg native engine ready (10 pipelines, embedded shaders)");
++    return e;
++}
++
++extern "C" void winfg_configure(WinFgEngine* e, int multiplier, int model,
++                                 int perfPreset, float flowScale) {
++    if (!e || e->unavailable) return;
++    e->cfg.enabled = true;
++    e->cfg.multiplier = std::max(2, multiplier);
++    e->cfg.model = (model == 3) ? 3 : 4;
++    e->cfg.perfPreset = std::clamp(perfPreset, 0, 2);
++    e->cfg.flowScale = std::clamp(flowScale, 0.25f, 1.0f);
++    e->fg.configure(e->cfg);
++}
++
++extern "C" bool winfg_prepare(WinFgEngine* e, uint32_t w, uint32_t h, VkFormat fmt) {
++    if (!e || e->unavailable || w == 0 || h == 0 || fmt == VK_FORMAT_UNDEFINED) return false;
++    if (e->builtW == w && e->builtH == h && e->builtFmt == fmt && e->fg.valid()) return true;
++
++    if (!e->fg.onResize(VkExtent2D{w, h}, fmt, false)) {
++        WFG_LOGE("bridge: onResize %ux%u failed", w, h);
++        e->unavailable = true;
++        return false;
++    }
++    e->destroyRing();
++    for (Slot& s : e->ring) {
++        if (!e->makeSlot(s, w, h, fmt)) { e->destroyRing(); e->unavailable = true; return false; }
++    }
++    e->builtW = w; e->builtH = h; e->builtFmt = fmt;
++    e->history = 0; e->currIdx = 0;
++    WFG_LOGI("bridge: prepared %ux%u fmt=%d model=%d preset=%d",
++             w, h, (int)fmt, e->cfg.model, e->cfg.perfPreset);
++    return true;
++}
++
++extern "C" uint32_t winfg_process(WinFgEngine* e, VkCommandBuffer cmd,
++                                   VkImage source, uint32_t w, uint32_t h) {
++    if (!e || e->unavailable || !e->fg.valid()) return 0;
++
++    // 旋转 ring：要覆盖的 slot 变为新 curr，另一个变为 prev
++    e->currIdx = 1 - e->currIdx;
++    Slot& dst = e->ring[e->currIdx];
++
++    // source GENERAL → TRANSFER_SRC；dst UNDEFINED → TRANSFER_DST
++    VkImageMemoryBarrier pre[2] = {
++        imgBar(source, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
++               VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_SHADER_WRITE_BIT,
++               VK_ACCESS_TRANSFER_READ_BIT),
++        imgBar(dst.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
++               0, VK_ACCESS_TRANSFER_WRITE_BIT),
++    };
++    e->dd.CmdPipelineBarrier(cmd,
++        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
++        VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 2, pre);
++
++    VkImageCopy region{};
++    region.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
++    region.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
++    region.extent = {w, h, 1};
++    e->dd.CmdCopyImage(cmd, source, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
++                       dst.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
++
++    // source → GENERAL（恢复）；dst → SHADER_READ_ONLY（chain 采样用）
++    VkImageMemoryBarrier post[2] = {
++        imgBar(source, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL,
++               VK_ACCESS_TRANSFER_READ_BIT,
++               VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_TRANSFER_READ_BIT),
++        imgBar(dst.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
++               VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT),
++    };
++    e->dd.CmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
++        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
++        0, 0, nullptr, 0, nullptr, 2, post);
++
++    dst.valid = true;
++    if (e->history < 2) e->history++;
++
++    // 返回应生成的帧数
++    if (e->history < 2) return 0;
++    uint32_t want = (uint32_t)std::max(e->cfg.multiplier - 1, 0);
++    return std::min(want, 3u);  // 最多3帧（4x）
++}
++
++extern "C" void winfg_generate(WinFgEngine* e, VkCommandBuffer cmd,
++                                uint32_t generation, uint32_t count,
++                                VkImage targetImage, VkImageView targetView,
++                                uint32_t /*w*/, uint32_t /*h*/) {
++    if (!e || e->unavailable || e->history < 2 || !e->fg.valid()) return;
++    const Slot& prev = e->ring[1 - e->currIdx];
++    const Slot& curr = e->ring[e->currIdx];
++    if (!prev.valid || !curr.valid) return;
++
++    // target GENERAL → GENERAL（为 compute write 做准备）
++    VkImageMemoryBarrier toWrite = imgBar(targetImage, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL,
++        VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_SHADER_READ_BIT, VK_ACCESS_SHADER_WRITE_BIT);
++    e->dd.CmdPipelineBarrier(cmd,
++        VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
++        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &toWrite);
++
++    e->fg.record(cmd, prev.view, curr.view, targetView,
++                 alphaFor(generation, count), e->gmSlot);
++    if (generation + 1 == count)
++        e->gmSlot = (e->gmSlot + 1) % (uint32_t)winfg::FrameGen::kGmSlots;
++}
++
++extern "C" void winfg_restore_curr(WinFgEngine* e, VkCommandBuffer cmd,
++                                    VkImage target, uint32_t w, uint32_t h) {
++    if (!e || e->unavailable) return;
++    const Slot& curr = e->ring[e->currIdx];
++    if (!curr.valid) return;
++
++    // curr SHADER_READ_ONLY → TRANSFER_SRC；target GENERAL → TRANSFER_DST
++    VkImageMemoryBarrier pre[2] = {
++        imgBar(curr.image, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
++               VK_ACCESS_SHADER_READ_BIT, VK_ACCESS_TRANSFER_READ_BIT),
++        imgBar(target, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
++               VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_READ_BIT, VK_ACCESS_TRANSFER_WRITE_BIT),
++    };
++    e->dd.CmdPipelineBarrier(cmd,
++        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
++        VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 2, pre);
++
++    VkImageCopy region{};
++    region.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
++    region.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
++    region.extent = {w, h, 1};
++    e->dd.CmdCopyImage(cmd, curr.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
++                       target, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
++
++    // curr → SHADER_READ_ONLY；target → GENERAL
++    VkImageMemoryBarrier post[2] = {
++        imgBar(curr.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
++               VK_ACCESS_TRANSFER_READ_BIT, VK_ACCESS_SHADER_READ_BIT),
++        imgBar(target, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL,
++               VK_ACCESS_TRANSFER_WRITE_BIT,
++               VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_TRANSFER_READ_BIT),
++    };
++    e->dd.CmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
++        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
++        0, 0, nullptr, 0, nullptr, 2, post);
++}
++
++extern "C" void winfg_reset(WinFgEngine* e) {
++    if (!e) return;
++    e->history = 0;
++}
++
++extern "C" void winfg_destroy(WinFgEngine* e) {
++    if (!e) return;
++    e->destroyRing();
++    e->fg.destroy();
++    delete e;
++}
++
++extern "C" bool winfg_valid(WinFgEngine* e) {
++    return e && !e->unavailable && e->fg.valid();
++}
+diff --git a/app/src/main/cpp/winlator/winfg/winfg_bridge.h b/app/src/main/cpp/winlator/winfg/winfg_bridge.h
+new file mode 100644
+index 0000000..a292ab3
+--- /dev/null
++++ b/app/src/main/cpp/winlator/winfg/winfg_bridge.h
+@@ -0,0 +1,90 @@
++// ============================================================================
++// winfg_bridge.h — C 接口层
++//
++// Why: vortekrenderer 是纯 C 项目，而 win-fg (framegen.cpp) 是 C++。
++//      本文件提供纯 C 接口，内部用 C++ 包装 winfg::FrameGen + 输入 ring。
++// What: 暴露 init/configure/prepare/process/generate/restore/reset/destroy。
++// How: 删除本文件及 winfg_bridge.cpp、winfg/ 目录即回退到无帧生成版本。
++//
++// 集成位置：xwindow_swapchain.c 的 XWindowSwapchain_presentImage()。
++// ============================================================================
++#ifndef WINFG_BRIDGE_H
++#define WINFG_BRIDGE_H
++
++#include <vulkan/vulkan.h>
++#include <stdbool.h>
++#include <stdint.h>
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++typedef struct WinFgEngine WinFgEngine;
++
++// 创建并初始化帧生成引擎。
++// instance/phys/dev/queueFamily/queue 来自 vortekrenderer 的 Vulkan 上下文。
++// 失败返回 NULL（logcat tag "win-fg" 有详细原因）。
++WinFgEngine* winfg_create(VkInstance instance,
++                          VkPhysicalDevice phys,
++                          VkDevice dev,
++                          uint32_t queueFamily,
++                          VkQueue queue);
++
++// 运行时配置（热更新，无需重启）。
++//   multiplier: 2/3/4（生成帧数 = multiplier-1）
++//   model:      3=optical flow, 4=bidirectional（默认4）
++//   perfPreset: 0=质量, 1=平衡（默认）, 2=性能
++//   flowScale:  光流幅度缩放（0.25~1.0，默认1.0）
++void winfg_configure(WinFgEngine* e,
++                     int multiplier,
++                     int model,
++                     int perfPreset,
++                     float flowScale);
++
++// 准备指定分辨率/格式的资源。分辨率变化时必须调用。
++bool winfg_prepare(WinFgEngine* e, uint32_t w, uint32_t h, VkFormat fmt);
++
++// 处理一帧：把 source 复制到内部 ring 作为 "curr"（上一帧自动变为 "prev"）。
++// 返回本次应生成的中间帧数（0=还没有 prev 帧或引擎无效，1=2x，2=3x，3=4x）。
++// 调用者需在调用前后自行管理 source 的 image layout（GENERAL 进出）。
++uint32_t winfg_process(WinFgEngine* e,
++                       VkCommandBuffer cmd,
++                       VkImage source,
++                       uint32_t w,
++                       uint32_t h);
++
++// 生成第 generation 帧（共 count 帧）到 targetImage/targetView。
++// generation: 0..count-1；count 通常 = winfg_process 的返回值。
++// target 必须是 GENERAL layout（进出都是 GENERAL）。
++void winfg_generate(WinFgEngine* e,
++                    VkCommandBuffer cmd,
++                    uint32_t generation,
++                    uint32_t count,
++                    VkImage targetImage,
++                    VkImageView targetView,
++                    uint32_t w,
++                    uint32_t h);
++
++// 把内部 ring 的 "curr"（最近一次 process 的真实帧）blit 到 target。
++// 用于生成帧显示后恢复 swapchain image 为真实帧。
++// target 必须是 GENERAL layout（进出都是 GENERAL）。
++void winfg_restore_curr(WinFgEngine* e,
++                        VkCommandBuffer cmd,
++                        VkImage target,
++                        uint32_t w,
++                        uint32_t h);
++
++// 重置历史（清除 prev 帧，下一帧重新开始采集）。
++void winfg_reset(WinFgEngine* e);
++
++// 销毁引擎及所有资源。
++void winfg_destroy(WinFgEngine* e);
++
++// 引擎是否有效（init 成功且未失败）。
++bool winfg_valid(WinFgEngine* e);
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif // WINFG_BRIDGE_H
+diff --git a/app/src/main/java/com/winlator/XServerDisplayActivity.java b/app/src/main/java/com/winlator/XServerDisplayActivity.java
+index a455c58..7460b7f 100644
+--- a/app/src/main/java/com/winlator/XServerDisplayActivity.java
++++ b/app/src/main/java/com/winlator/XServerDisplayActivity.java
+@@ -18,6 +18,7 @@ import android.widget.ArrayAdapter;
+ import android.widget.CheckBox;
+ import android.widget.FrameLayout;
+ import android.widget.Spinner;
++import android.widget.Switch;
+ 
+ import androidx.annotation.NonNull;
+ import androidx.annotation.Nullable;
+@@ -58,6 +59,7 @@ import com.winlator.core.StringUtils;
+ import com.winlator.core.TarCompressorUtils;
+ import com.winlator.core.Win32AppWorkarounds;
+ import com.winlator.core.WineInfo;
++import com.winlator.xenvironment.components.VortekRendererComponent;
+ import com.winlator.core.WineInstaller;
+ import com.winlator.core.WineRegistryEditor;
+ import com.winlator.core.WineStartMenuCreator;
+@@ -85,7 +87,6 @@ import com.winlator.xenvironment.components.NetworkInfoUpdateComponent;
+ import com.winlator.xenvironment.components.PulseAudioComponent;
+ import com.winlator.xenvironment.components.SysVSharedMemoryComponent;
+ import com.winlator.xenvironment.components.VirGLRendererComponent;
+-import com.winlator.xenvironment.components.VortekRendererComponent;
+ import com.winlator.xenvironment.components.XServerComponent;
+ import com.winlator.xserver.Atom;
+ import com.winlator.xserver.Property;
+@@ -169,6 +170,19 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
+         menu.findItem(R.id.menu_item_logs).setVisible(enableLogs);
+         navigationView.setNavigationItemSelectedListener(this);
+ 
++        // win-fg 帧生成开关（native 集成，运行时热切换）
++        MenuItem winfgItem = menu.findItem(R.id.menu_item_winfg);
++        if (winfgItem != null && winfgItem.getActionView() instanceof Switch) {
++            Switch winfgSwitch = (Switch) winfgItem.getActionView();
++            boolean winfgEnabled = preferences.getBoolean("winfg_enabled", false);
++            winfgSwitch.setChecked(winfgEnabled);
++            VortekRendererComponent.nativeSetWinFgEnabled(winfgEnabled);
++            winfgSwitch.setOnCheckedChangeListener((buttonView, isChecked) -> {
++                VortekRendererComponent.nativeSetWinFgEnabled(isChecked);
++                preferences.edit().putBoolean("winfg_enabled", isChecked).apply();
++            });
++        }
++
+         rootFS = RootFS.find(this);
+ 
+         if (!isGenerateWineprefix()) {
+diff --git a/app/src/main/java/com/winlator/xenvironment/components/VortekRendererComponent.java b/app/src/main/java/com/winlator/xenvironment/components/VortekRendererComponent.java
+index 9120e91..c225543 100644
+--- a/app/src/main/java/com/winlator/xenvironment/components/VortekRendererComponent.java
++++ b/app/src/main/java/com/winlator/xenvironment/components/VortekRendererComponent.java
+@@ -179,4 +179,9 @@ public class VortekRendererComponent extends EnvironmentComponent implements Con
+     private native void initVulkanWrapper(String nativeLibraryDir, String libvulkanPath);
+ 
+     private native boolean handleExtraDataRequest(long contextPtr, int requestCode, int requestLength);
++
++    // win-fg 帧生成（native 集成，运行时热切换）
++    public static native void nativeSetWinFgEnabled(boolean enabled);
++    public static native void nativeSetWinFgConfig(int multiplier, int model, int preset, float flowScale);
++    public static native boolean nativeIsWinFgEnabled();
+ }
+diff --git a/app/src/main/res/menu/xserver_menu.xml b/app/src/main/res/menu/xserver_menu.xml
+index a471d4a..23b91e4 100644
+--- a/app/src/main/res/menu/xserver_menu.xml
++++ b/app/src/main/res/menu/xserver_menu.xml
+@@ -1,6 +1,7 @@
+ <?xml version="1.0" encoding="utf-8"?>
+ <menu
+-  xmlns:android="http://schemas.android.com/apk/res/android">
++  xmlns:android="http://schemas.android.com/apk/res/android"
++  xmlns:app="http://schemas.android.com/apk/res-auto">
+     <group android:checkableBehavior="none">
+         <item android:icon="@drawable/icon_keyboard" android:id="@+id/menu_item_keyboard" android:title="@string/keyboard" />
+         <item android:icon="@drawable/icon_input_controls" android:id="@+id/menu_item_input_controls" android:title="@string/input_controls" />
+@@ -8,6 +9,11 @@
+         <item android:icon="@drawable/icon_move" android:id="@+id/menu_item_move_cursor_to_touchpoint" android:title="@string/move_cursor_to_touchpoint" />
+         <item android:icon="@drawable/icon_task_manager" android:id="@+id/menu_item_task_manager" android:title="@string/task_manager" />
+         <item android:icon="@drawable/icon_active_windows" android:id="@+id/menu_item_active_windows" android:title="@string/active_windows" />
++        <!-- win-fg 帧生成开关（native 集成，运行时热切换） -->
++        <item android:icon="@drawable/icon_screen_effect"
++              android:id="@+id/menu_item_winfg"
++              android:title="@string/win_fg_frame_gen"
++              app:actionViewClass="android.widget.Switch" />
+         <item android:icon="@drawable/icon_magnifier" android:id="@+id/menu_item_magnifier" android:title="@string/magnifier" />
+         <item android:icon="@drawable/icon_screen_effect" android:id="@+id/menu_item_screen_effect" android:title="@string/screen_effect" />
+         <item android:icon="@drawable/icon_pip_mode" android:id="@+id/menu_item_pip_mode" android:title="@string/pip_mode" />
+diff --git a/app/src/main/res/values-zh/strings.xml b/app/src/main/res/values-zh/strings.xml
+index eeeb8e5..f64df2d 100644
+--- a/app/src/main/res/values-zh/strings.xml
++++ b/app/src/main/res/values-zh/strings.xml
+@@ -344,6 +344,7 @@
+     <string name="opengl_version">OpenGL版本</string>
+     <string name="disable_vertex_array_bgra">禁用顶点阵列BGRA</string>
+     <string name="screen_effect">屏幕滤镜</string>
++    <string name="win_fg_frame_gen">帧生成 (Win-FG)</string>
+     <string name="enable_fxaa">启用抗锯齿</string>
+     <string name="brightness">亮度</string>
+     <string name="contrast">对比度</string>
+diff --git a/app/src/main/res/values/strings.xml b/app/src/main/res/values/strings.xml
+index 1104f8e..bad9dec 100644
+--- a/app/src/main/res/values/strings.xml
++++ b/app/src/main/res/values/strings.xml
+@@ -346,6 +346,7 @@
+     <string name="opengl_version">OpenGL Version</string>
+     <string name="disable_vertex_array_bgra">Disable vertex array BGRA</string>
+     <string name="screen_effect">Screen Effect</string>
++    <string name="win_fg_frame_gen">Frame Gen (Win-FG)</string>
+     <string name="enable_fxaa">Enable FXAA</string>
+     <string name="brightness">Brightness</string>
+     <string name="contrast">Contrast</string>
