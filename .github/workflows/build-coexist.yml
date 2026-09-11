@@ -47,38 +47,46 @@ jobs:
           chmod +x scripts/apply-config.sh
           bash scripts/apply-config.sh coexist.properties app/build.gradle
 
-      - name: 拉取 win-fg 最新 release（帧生成引擎，MIT）
+      - name: 同步 win-fg 上游源码（native 帧生成引擎，MIT）
         run: |
-          # Why: win-fg 是独立 Vulkan 帧生成 layer，与 winlator 解耦。
-          #      不 fork 上游源码，CI 构建时自动拉取官方最新 release 预编译 .so，
-          #      零编译、零维护、自动跟随上游版本。
-          # What: 下载 libwin_fg.so + layer manifest 到 assets/winfg/，
-          #      修正 manifest library_path 为 guest 绝对路径。
+          # Why: win-fg native 模式把帧生成编译进 host compositor（vortekrenderer），
+          #      比 guest Vulkan layer 模式效果好（layer 模式生成帧被 host 丢弃，仅~25%提升）。
+          #      构建时从上游拉取最新源码，自动跟随上游更新。
+          # What: 下载 win-fg 核心源码到 app/src/main/cpp/winlator/winfg/，
+          #      CMake 编译进 vortekrenderer。
           # How:  删除本步骤即回退到无帧生成版本。
-          mkdir -p app/src/main/assets/winfg
-          # latest/download 自动重定向到最新 release 资产，零 API 调用不限流
-          curl -fsSL -o app/src/main/assets/winfg/libwin_fg.so \
-            "https://github.com/The412Banner/win-fg/releases/latest/download/libwin_fg.so" \
-            || { echo "::error::libwin_fg.so 下载失败"; exit 1; }
-          curl -fsSL -o app/src/main/assets/winfg/VkLayer_win_framegen.json \
-            "https://github.com/The412Banner/win-fg/releases/latest/download/VkLayer_win_framegen.json" \
-            || { echo "::error::layer manifest 下载失败"; exit 1; }
-          # 修正 library_path：官方是 ./ 相对路径，guest Vulkan loader 需绝对路径
-          python3 -c "
-          import json
-          p='app/src/main/assets/winfg/VkLayer_win_framegen.json'
-          d=json.load(open(p))
-          d['layer']['library_path']='/usr/lib/libwin_fg.so'
-          json.dump(d, open(p,'w'), indent=4)
-          "
-          # 验证下载结果
-          ls -lh app/src/main/assets/winfg/
-          test -s app/src/main/assets/winfg/libwin_fg.so || { echo "::error::libwin_fg.so 为空"; exit 1; }
-          # 提取 win-fg 版本号（从重定向 URL 的 download/<tag>/ 路径）
-          WINFG_TAG=$(curl -sI "https://github.com/The412Banner/win-fg/releases/latest/download/libwin_fg.so" \
-            | grep -i '^location:' | sed 's#.*/download/\([^/]*\)/.*#\1#' | tr -d '\r')
-          echo "WINFG_VERSION=${WINFG_TAG:-unknown}" >> $GITHUB_ENV
-          echo "win-fg 版本: ${WINFG_TAG:-unknown}"
+          mkdir -p app/src/main/cpp/winlator/winfg
+          WINFG_FILES="framegen.cpp framegen.hpp record_impl.inc config.hpp embedded_shaders.hpp vk_dispatch.hpp log.hpp"
+          for f in $WINFG_FILES; do
+            curl -fsSL -o "app/src/main/cpp/winlator/winfg/$f" \
+              "https://raw.githubusercontent.com/The412Banner/win-fg/main/src/$f" \
+              || { echo "::error::win-fg 源码下载失败: $f"; exit 1; }
+          done
+          curl -fsSL -o app/src/main/cpp/winlator/winfg/LICENSE.win-fg \
+            "https://raw.githubusercontent.com/The412Banner/win-fg/main/LICENSE" || true
+          curl -fsSL -o app/src/main/cpp/winlator/winfg/NOTICE_FIDELITYFX_OPTICALFLOW.md \
+            "https://raw.githubusercontent.com/The412Banner/win-fg/main/NOTICE_FIDELITYFX_OPTICALFLOW.md" || true
+          ls -lh app/src/main/cpp/winlator/winfg/
+          test -s app/src/main/cpp/winlator/winfg/framegen.cpp || { echo "::error::framegen.cpp 为空"; exit 1; }
+          WINFG_COMMIT=$(git ls-remote https://github.com/The412Banner/win-fg.git main 2>/dev/null | awk '{print substr($1,1,12)}')
+          echo "WINFG_VERSION=${WINFG_COMMIT:-unknown}" >> $GITHUB_ENV
+          echo "win-fg 上游 commit: ${WINFG_COMMIT:-unknown}"
+
+      - name: 应用 win-fg native 集成补丁
+        run: |
+          # Why: 15 个 native/Java/UI 文件改动合并为一个 patch（winfg-native.patch，仓库根目录），
+          #      CI 构建时自动应用，避免在 GitHub 网页端逐个上传深层文件。
+          # What: git apply 应用到工作树；失败则明确报错退出（不静默）。
+          # How:  上游更新导致 patch 冲突时，用 scripts/rebuild-winfg-patch.sh 重建 patch。
+          test -f winfg-native.patch || { echo "::error::winfg-native.patch 不存在（请在仓库根目录上传）"; exit 1; }
+          if ! git apply --check winfg-native.patch 2>/dev/null; then
+            echo "::error::winfg-native.patch 应用检查失败（可能上游更新了相关文件）"
+            git apply --check --verbose winfg-native.patch 2>&1 | tail -5 || true
+            exit 1
+          fi
+          git apply winfg-native.patch
+          echo "win-fg native 补丁已应用 ✓"
+          ls -la app/src/main/cpp/winlator/winfg/winfg_bridge.cpp
 
       - name: 对 assets 做等长包名替换
         run: |
