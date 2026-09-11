@@ -37,44 +37,47 @@ jobs:
         with:
           fetch-depth: 0   # 必须完整历史才能 merge
 
-      - name: 配置 git（PAT 认证，绕过分支保护）
+      - name: 配置 git（PAT 优先，无效则回退 GITHUB_TOKEN）
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          # Why: GITHUB_TOKEN 无法绕过 main 分支保护规则（require PR / status checks），
-          #      必须用 Personal Access Token 才能直接 push 到受保护的 main。
-          # What: 先用 GitHub API 验证 PAT 有效性和 push 权限，再配置 remote。
-          # How:  删除 SYNC_TOKEN secret 即回退为 GITHUB_TOKEN（但分支保护会导致 push 失败）。
-          if [ -z "${{ secrets.SYNC_TOKEN }}" ]; then
-            echo "::error::未配置 SYNC_TOKEN secret！请先去 Settings → Secrets and variables → Actions 添加"
-            exit 1
-          fi
 
-          echo "=== 验证 PAT 有效性 ==="
+          # Why: main 有分支保护时 GITHUB_TOKEN 无法 push，需 PAT 绕过；
+          #      删了分支保护后 GITHUB_TOKEN 即可直接 push，无需 PAT。
+          # What: 优先验证 PAT，有效则用 PAT；无效/未配置则回退 GITHUB_TOKEN。
+          # How:  删除 SYNC_TOKEN secret 或 PAT 无效时自动回退；删分支保护后 GITHUB_TOKEN 即可工作。
           TOKEN="${{ secrets.SYNC_TOKEN }}"
-          HTTP_CODE=$(curl -s -o /tmp/repo_info.json -w "%{http_code}" \
-            -H "Authorization: Bearer $TOKEN" \
-            -H "Accept: application/vnd.github+json" \
-            https://api.github.com/repos/hao728/winlator-cn-clone)
-          echo "API 状态码: $HTTP_CODE（200=有效，401=token错误/过期，403=权限不足）"
-          if [ "$HTTP_CODE" != "200" ]; then
-            echo "::error::PAT 无效！API 返回 $HTTP_CODE"
-            echo "::error::请重新创建 Fine-grained PAT：Repository access 选 Only select repositories → 选本仓库"
-            echo "::error::Repository permissions → Contents 选 Read and write"
-            exit 1
-          fi
-          PUSH_PERM=$(python3 -c "import json; d=json.load(open('/tmp/repo_info.json')); print(d.get('permissions',{}).get('push','unknown'))" 2>/dev/null || echo "unknown")
-          echo "PAT 对该仓库的 push 权限: $PUSH_PERM"
-          if [ "$PUSH_PERM" != "True" ]; then
-            echo "::error::PAT 没有 push 权限（当前 push=$PUSH_PERM）"
-            echo "::error::Fine-grained PAT 创建时 Contents 必须选 Read and write"
-            echo "::error::不能选 Public Repositories (read-only)，必须 Only select repositories"
-            exit 1
-          fi
-          echo "PAT 验证通过 ✓"
+          USE_PAT=false
 
-          git remote set-url origin https://x-access-token:${TOKEN}@github.com/hao728/winlator-cn-clone.git
-          echo "PAT 认证已配置，origin remote 已更新"
+          if [ -n "$TOKEN" ]; then
+            echo "检测到 SYNC_TOKEN，正在验证..."
+            HTTP_CODE=$(curl -s -o /tmp/repo_info.json -w "%{http_code}" \
+              -H "Authorization: Bearer $TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              https://api.github.com/repos/hao728/winlator-cn-clone)
+            echo "PAT API 状态码: $HTTP_CODE（200=有效，401=token无效，403=权限不足）"
+            if [ "$HTTP_CODE" = "200" ]; then
+              PUSH_PERM=$(python3 -c "import json; d=json.load(open('/tmp/repo_info.json')); print(d.get('permissions',{}).get('push','unknown'))" 2>/dev/null || echo "unknown")
+              echo "PAT push 权限: $PUSH_PERM"
+              if [ "$PUSH_PERM" = "True" ]; then
+                git remote set-url origin https://x-access-token:${TOKEN}@github.com/hao728/winlator-cn-clone.git
+                USE_PAT=true
+                echo "✓ PAT 验证通过，使用 PAT 认证（可绕过分支保护）"
+              else
+                echo "::warning::PAT 没有 push 权限（push=$PUSH_PERM），回退使用 GITHUB_TOKEN"
+              fi
+            else
+              echo "::warning::PAT 无效（HTTP $HTTP_CODE），回退使用 GITHUB_TOKEN"
+              echo "::warning::401=token复制错误/带空格；403=权限不足。手机复制时注意不要带空格换行"
+            fi
+          else
+            echo "未配置 SYNC_TOKEN，使用 GITHUB_TOKEN"
+          fi
+
+          if [ "$USE_PAT" = "false" ]; then
+            echo "→ 使用 GITHUB_TOKEN（要求 main 无分支保护，且 Workflow permissions 为 Read and write）"
+            echo "→ 如 push 失败，请去 Settings → Branches 删除 main 的分支保护规则"
+          fi
 
       - name: 添加上游并拉取
         run: |
