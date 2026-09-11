@@ -68,7 +68,7 @@ jobs:
             "https://raw.githubusercontent.com/The412Banner/win-fg/master/NOTICE_FIDELITYFX_OPTICALFLOW.md" || true
           ls -lh app/src/main/cpp/winlator/winfg/
           test -s app/src/main/cpp/winlator/winfg/framegen.cpp || { echo "::error::framegen.cpp 为空"; exit 1; }
-          WINFG_COMMIT=$(git ls-remote https://github.com/The412Banner/win-fg.git master 2>/dev/null | awk '{print substr($1,1,12)}')
+          WINFG_COMMIT=$(git ls-remote https://github.com/The412Banner/win-fg.git refs/heads/master 2>/dev/null | awk '{print substr($1,1,12)}')
           echo "WINFG_VERSION=${WINFG_COMMIT:-unknown}" >> $GITHUB_ENV
           echo "win-fg 上游 commit: ${WINFG_COMMIT:-unknown}"
 

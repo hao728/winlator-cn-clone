@@ -209,7 +209,7 @@ jobs:
         id: winfg-check
         run: |
           # native 集成用源码而非 release .so，跟踪上游 main 分支 commit
-          WINFG_LATEST=$(git ls-remote https://github.com/The412Banner/win-fg.git master 2>/dev/null | awk '{print substr($1,1,12)}')
+          WINFG_LATEST=$(git ls-remote https://github.com/The412Banner/win-fg.git refs/heads/master 2>/dev/null | awk '{print substr($1,1,12)}')
           echo "win-fg 上游 commit: ${WINFG_LATEST:-unknown}"
           WINFG_STORED=""
           if [ -f .winfg-version ]; then
