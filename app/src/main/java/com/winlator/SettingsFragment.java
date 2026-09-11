@@ -294,7 +294,7 @@ public class SettingsFragment extends Fragment {
             else if (preferences.contains("wine_debug_channels")) editor.remove("wine_debug_channels");
 
             if (editor.commit()) {
-                MainApplication.enableLogcatCapture(getContext());
+                MainApplication.syncLogcatCapture(getContext());
                 if (!restartApp) {
                     NavigationView navigationView = getActivity().findViewById(R.id.NavigationView);
                     navigationView.setCheckedItem(R.id.menu_item_containers);

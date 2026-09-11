@@ -9,7 +9,6 @@ import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.ActivityInfo;
 import android.os.Bundle;
-import android.util.Log;
 import android.view.KeyEvent;
 import android.view.Menu;
 import android.view.MenuItem;
@@ -100,8 +99,6 @@ import org.json.JSONException;
 import org.json.JSONObject;
 
 import java.io.File;
-import java.io.FileOutputStream;
-import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.concurrent.Executors;
@@ -299,7 +296,6 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
             if (!isGenerateWineprefix()) {
                 setupWineSystemFiles();
                 extractGraphicsDriverFiles();
-                extractWinFGFiles();
                 changeWineAudioDriver();
             }
             setupXEnvironment();
@@ -872,51 +868,6 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
 
                 if (changed || MainActivity.DEBUG_MODE) TarCompressorUtils.extract(TarCompressorUtils.Type.ZSTD, this, "graphics_driver/gladio-"+DefaultVersion.GLADIO+".tzst", rootDir);
                 break;
-        }
-    }
-
-    // ===== win-fg 帧生成集成（Win-FG Native / Vulkan layer）=====
-    // Why: 为容器内的 DXVK/Vulkan 应用提供帧生成（插帧）能力。win-fg 是 clean-room
-    //      Vulkan 光学流插帧引擎（MIT），以 implicit layer 形态挂进 guest 的 Vulkan
-    //      loader：hook CreateSwapchainKHR / QueuePresentKHR，在两帧之间合成中间帧。
-    //      本方法把 APK assets/winfg/ 下的 libwin_fg.so 与 layer manifest 解压到
-    //      rootfs，使 loader 能发现并加载该 layer。
-    // What: 影响 XServerDisplayActivity（容器启动流程）+ assets/winfg/（新增资源）。
-    //       不修改 rootfs 现有文件，纯增量；不影响共存包名逻辑。
-    // How:  删除 assets/winfg/ 目录即可恢复（APK 不含该资源时此方法自然空转）。
-    private void extractWinFGFiles() {
-        try {
-            File rootDir = rootFS.getRootDir();
-            File libDir = rootFS.getLibDir();
-            File layerDir = new File(rootDir, "/usr/share/vulkan/implicit_layer.d");
-
-            // 1) libwin_fg.so -> /usr/lib/libwin_fg.so（已存在且体积正常则跳过，避免每次启动重写）
-            File libFile = new File(libDir, "libwin_fg.so");
-            if (!libFile.isFile() || libFile.length() < 1000000) {
-                if (!libDir.isDirectory()) libDir.mkdirs();
-                try (java.io.InputStream is = getAssets().open("winfg/libwin_fg.so");
-                     FileOutputStream fos = new FileOutputStream(libFile)) {
-                    byte[] buf = new byte[65536];
-                    int n;
-                    while ((n = is.read(buf)) != -1) fos.write(buf, 0, n);
-                }
-                libFile.setExecutable(true, false);
-                Log.i("winfg", "installed /usr/lib/libwin_fg.so (" + libFile.length() + " bytes)");
-            }
-
-            // 2) VkLayer_win_framegen.json -> /usr/share/vulkan/implicit_layer.d/
-            if (!layerDir.isDirectory()) layerDir.mkdirs();
-            File manifestFile = new File(layerDir, "VkLayer_win_framegen.json");
-            try (java.io.InputStream is = getAssets().open("winfg/VkLayer_win_framegen.json");
-                 FileOutputStream fos = new FileOutputStream(manifestFile)) {
-                byte[] buf = new byte[4096];
-                int n;
-                while ((n = is.read(buf)) != -1) fos.write(buf, 0, n);
-            }
-            Log.i("winfg", "installed implicit layer manifest");
-        }
-        catch (IOException e) {
-            Log.w("winfg", "win-fg extract skipped: " + e.getMessage());
         }
     }
 
