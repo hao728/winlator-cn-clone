@@ -161,6 +161,28 @@ jobs:
             done
             git commit --no-edit || echo "无变更可提交，跳过"
           fi
+
+          # ===== 关键：保护 workflow 目录（丢弃上游的，保留我们的定制）=====
+          # Why: 上游也有 .github/workflows/（android-ci.yml、build-native.yml），
+          #      merge 会把上游版本合入 → push 时 GitHub 拒绝：
+          #      "refusing to allow a GitHub App to create or update workflow without workflows permission"
+          # What: merge 后用 ORIG_HEAD（merge 前的 HEAD=我们的版本）恢复 workflow 目录，
+          #       并删除上游新增的 workflow 文件，确保 push 不涉及 workflow 文件变更。
+          # How:  如未来需要让上游 workflow 合入，删除本段即可（但需给 workflow 加 workflows: write 权限）。
+          echo "=== 保护 .github/workflows（保留我们的定制，丢弃上游的）==="
+          git checkout ORIG_HEAD -- .github/workflows/ 2>/dev/null || echo "(workflow 目录恢复完成或无需恢复)"
+          git diff --cached --name-only --diff-filter=A -- .github/workflows/ | while read -r f; do
+            echo "丢弃上游新增 workflow: $f"
+            git rm -f --cached "$f" 2>/dev/null || git rm -f "$f" 2>/dev/null || true
+          done
+          git add .github/workflows/ 2>/dev/null || true
+          # merge 无冲突时已自动 commit → 用 amend 把恢复合入；有冲突未 commit → 直接 commit
+          if git diff --cached --quiet 2>/dev/null; then
+            echo "workflow 目录无变化，无需提交"
+          else
+            git commit --amend --no-edit 2>/dev/null || git commit --no-edit
+            echo "workflow 目录已恢复为我们的版本 ✓"
+          fi
           git log --oneline -5
 
       - name: 检测上游是否更新了我们改过的文件
