@@ -43,18 +43,37 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           # Why: GITHUB_TOKEN 无法绕过 main 分支保护规则（require PR / status checks），
           #      必须用 Personal Access Token 才能直接 push 到受保护的 main。
-          # What: 把 origin remote 的认证替换为 PAT，后续所有 git push 自动使用。
+          # What: 先用 GitHub API 验证 PAT 有效性和 push 权限，再配置 remote。
           # How:  删除 SYNC_TOKEN secret 即回退为 GITHUB_TOKEN（但分支保护会导致 push 失败）。
           if [ -z "${{ secrets.SYNC_TOKEN }}" ]; then
-            echo "::error::========================================"
-            echo "::error::未配置 SYNC_TOKEN secret！"
-            echo "::error::请先去 Settings → Secrets and variables → Actions"
-            echo "::error::→ New repository secret → Name: SYNC_TOKEN"
-            echo "::error::→ Value: 你的 Fine-grained PAT（Contents: Read and write）"
-            echo "::error::========================================"
+            echo "::error::未配置 SYNC_TOKEN secret！请先去 Settings → Secrets and variables → Actions 添加"
             exit 1
           fi
-          git remote set-url origin https://x-access-token:${{ secrets.SYNC_TOKEN }}@github.com/hao728/winlator-cn-clone.git
+
+          echo "=== 验证 PAT 有效性 ==="
+          TOKEN="${{ secrets.SYNC_TOKEN }}"
+          HTTP_CODE=$(curl -s -o /tmp/repo_info.json -w "%{http_code}" \
+            -H "Authorization: Bearer $TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/hao728/winlator-cn-clone)
+          echo "API 状态码: $HTTP_CODE（200=有效，401=token错误/过期，403=权限不足）"
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "::error::PAT 无效！API 返回 $HTTP_CODE"
+            echo "::error::请重新创建 Fine-grained PAT：Repository access 选 Only select repositories → 选本仓库"
+            echo "::error::Repository permissions → Contents 选 Read and write"
+            exit 1
+          fi
+          PUSH_PERM=$(python3 -c "import json; d=json.load(open('/tmp/repo_info.json')); print(d.get('permissions',{}).get('push','unknown'))" 2>/dev/null || echo "unknown")
+          echo "PAT 对该仓库的 push 权限: $PUSH_PERM"
+          if [ "$PUSH_PERM" != "True" ]; then
+            echo "::error::PAT 没有 push 权限（当前 push=$PUSH_PERM）"
+            echo "::error::Fine-grained PAT 创建时 Contents 必须选 Read and write"
+            echo "::error::不能选 Public Repositories (read-only)，必须 Only select repositories"
+            exit 1
+          fi
+          echo "PAT 验证通过 ✓"
+
+          git remote set-url origin https://x-access-token:${TOKEN}@github.com/hao728/winlator-cn-clone.git
           echo "PAT 认证已配置，origin remote 已更新"
 
       - name: 添加上游并拉取
@@ -180,23 +199,23 @@ jobs:
         if: steps.check.outputs.up_to_date == 'false'
         run: |
           echo "=== 推送前诊断 ==="
-          git remote -v
           git log --oneline -3
           echo "=== 执行 git push origin main ==="
-          if ! git push origin main 2>&1; then
+          # 捕获 git push 的原始错误，输出到注解（未登录也能在 Annotations 看到）
+          PUSH_OUT=$(git push origin main 2>&1) && {
+            echo "$PUSH_OUT"
+            echo "推送成功 ✓"
+          } || {
+            echo "$PUSH_OUT"
             echo ""
-            echo "::error::========================================"
-            echo "::error::推送失败！请按以下顺序排查："
-            echo "::error::  ① Settings → Actions → General → Workflow permissions"
-            echo "::error::     必须选「Read and write permissions」（默认只读会导致 403）"
-            echo "::error::  ② Settings → Branches → Branch protection rules"
-            echo "::error::     如果 main 有保护（require PR / status checks），GITHUB_TOKEN 无法直接 push"
-            echo "::error::     → 删除 main 保护规则，或在保护规则里给 github-actions[bot] 豁免"
-            echo "::error::  ③ 以上都不行 → 改用 PAT（见操作说明「PAT 备选方案」）"
-            echo "::error::========================================"
+            echo "::error::========== git push 原始错误 =========="
+            echo "$PUSH_OUT" | while IFS= read -r line; do
+              [ -n "$line" ] && echo "::error::$line"
+            done
+            echo "::error::======================================"
+            echo "::error::排查：403=权限不足/分支保护；401=PAT无效；non-fast-forward=远程有新提交"
             exit 1
-          fi
-          echo "推送成功"
+          }
 
       # ===== win-fg 帧生成引擎上游跟踪 =====
       - name: 检测 win-fg 上游版本
@@ -247,8 +266,17 @@ jobs:
             TAG="${TAG}-$(date +%S)"
           fi
           git tag "$TAG"
-          git push origin "$TAG"
-          echo "已自动打 tag: $TAG（已触发构建 + 自检 + 发布）"
+          TAG_OUT=$(git push origin "$TAG" 2>&1) && {
+            echo "$TAG_OUT"
+            echo "已自动打 tag: $TAG（已触发构建 + 自检 + 发布）"
+          } || {
+            echo "$TAG_OUT"
+            echo "::error::推送 tag 失败："
+            echo "$TAG_OUT" | while IFS= read -r line; do
+              [ -n "$line" ] && echo "::error::$line"
+            done
+            exit 1
+          }
           # 输出给后续步骤
           echo "auto_tag=$TAG" >> $GITHUB_OUTPUT
 
