@@ -604,14 +604,19 @@ bool readUnboundVertexArrays(GLContext* context, GLenum drawMode, int drawCount,
                 uint64_t offset = (uint64_t)vertexAttrib->pointer;
                 swapPixelsRedBlue(pointer + offset, vertexAttrib->stride, byteCount - offset);
                 oldArrayBuffer = clientState->vao->buffer[indexOfGLTarget(GL_ARRAY_BUFFER)];
-                if (clientState->vao->bgraBuffer == 0) glGenBuffers(1, &clientState->vao->bgraBuffer);
-                glBindBuffer(GL_ARRAY_BUFFER, clientState->vao->bgraBuffer);
+                if (clientState->vao->bgraBuffer[i] == 0) glGenBuffers(1, &clientState->vao->bgraBuffer[i]);
+                glBindBuffer(GL_ARRAY_BUFFER, clientState->vao->bgraBuffer[i]);
                 glBufferData(GL_ARRAY_BUFFER, byteCount, pointer, GL_DYNAMIC_DRAW);
                 pointer = vertexAttrib->pointer;
             }
 
             int location = i;
-            if (legacyEnabledWithProgram || clientState->arbProgram[0]) {
+            // wined3d 生成的 shader 自带 layout(location = N)（N 即 vs_inN 的下标），此时 location 必须用 i；
+            // 只有 legacy 顶点数组或纯 ARB program 路径（无 wined3d program）才需要查 gd_* 属性映射。
+            // 原实现只要 arbProgram[0] 非空就覆盖 location，而 program->location.attributes[] 仅对 gd_* 内建
+            // 属性填充（wined3d shader 不含 gd_*，该数组保持 calloc 的 0），会把属性绑定到错误 location。
+            bool needsArbMapping = clientState->arbProgram[0] && !clientState->program;
+            if (legacyEnabledWithProgram || needsArbMapping) {
                 if (clientState->program) {
                     location = clientState->program->location.attributes[i];
                 }

@@ -248,6 +248,7 @@ void gd_handle_glBlitFramebuffer(GLContext* context) {
     GLbitfield mask = ArrayBuffer_getInt(&context->inputBuffer);
     GLenum filter = ArrayBuffer_getInt(&context->inputBuffer);
 
+    GLRenderer_invalidatePixelReadCache(currentRenderer);
     glBlitFramebuffer(srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, mask, filter);
     gd_presentIfFrontBufferBound(context);
 }
@@ -323,6 +324,7 @@ void gd_handle_glClampColor(GLContext* context) {
 void gd_handle_glClear(GLContext* context) {
     GLbitfield mask = ArrayBuffer_getInt(&context->inputBuffer);
 
+    GLRenderer_invalidatePixelReadCache(currentRenderer);
     glClear(mask);
 }
 
@@ -791,6 +793,7 @@ void gd_handle_glDrawArrays(GLContext* context) {
     GLint first = ArrayBuffer_getInt(&context->inputBuffer);
     GLsizei count = ArrayBuffer_getInt(&context->inputBuffer);
 
+    GLRenderer_invalidatePixelReadCache(currentRenderer);
     ShaderConverter_updateBoundProgram();
     if (readUnboundVertexArrays(context, mode, count, NULL, GL_NONE)) return;
     glDrawArrays(mode, first, count);
@@ -802,6 +805,7 @@ void gd_handle_glDrawArraysInstanced(GLContext* context) {
     GLsizei count = ArrayBuffer_getInt(&context->inputBuffer);
     GLsizei instancecount = ArrayBuffer_getInt(&context->inputBuffer);
 
+    GLRenderer_invalidatePixelReadCache(currentRenderer);
     ShaderConverter_updateBoundProgram();
     if (readUnboundVertexArrays(context, mode, count, NULL, GL_NONE)) return;
     glDrawArraysInstanced(mode, first, count, instancecount);
@@ -825,6 +829,7 @@ void gd_handle_glDrawElements(GLContext* context) {
     GLsizei count = ArrayBuffer_getInt(&context->inputBuffer);
     GLenum type = ArrayBuffer_getInt(&context->inputBuffer);
 
+    GLRenderer_invalidatePixelReadCache(currentRenderer);
     ShaderConverter_updateBoundProgram();
     void* indices = NULL;
     if (readUnboundVertexArrays(context, mode, count, &indices, type)) return;
@@ -837,6 +842,7 @@ void gd_handle_glDrawElementsBaseVertex(GLContext* context) {
     GLenum type = ArrayBuffer_getInt(&context->inputBuffer);
     GLint basevertex = ArrayBuffer_getInt(&context->inputBuffer);
 
+    GLRenderer_invalidatePixelReadCache(currentRenderer);
     ShaderConverter_updateBoundProgram();
     void* indices = NULL;
     if (readUnboundVertexArrays(context, mode, count, &indices, type)) return;
@@ -849,6 +855,7 @@ void gd_handle_glDrawElementsInstanced(GLContext* context) {
     GLenum type = ArrayBuffer_getInt(&context->inputBuffer);
     GLsizei instancecount = ArrayBuffer_getInt(&context->inputBuffer);
 
+    GLRenderer_invalidatePixelReadCache(currentRenderer);
     ShaderConverter_updateBoundProgram();
     void* indices = NULL;
     if (readUnboundVertexArrays(context, mode, count, &indices, type)) return;
@@ -862,6 +869,7 @@ void gd_handle_glDrawElementsInstancedBaseVertex(GLContext* context) {
     GLsizei instancecount = ArrayBuffer_getInt(&context->inputBuffer);
     GLint basevertex = ArrayBuffer_getInt(&context->inputBuffer);
 
+    GLRenderer_invalidatePixelReadCache(currentRenderer);
     ShaderConverter_updateBoundProgram();
     void* indices = NULL;
     if (readUnboundVertexArrays(context, mode, count, &indices, type)) return;
@@ -877,6 +885,7 @@ void gd_handle_glDrawPixels(GLContext* context) {
 
     void* pixels = NULL;
     RING_READ_BEGIN(context->serverRing, pixels, imageSize);
+    GLRenderer_invalidatePixelReadCache(currentRenderer);
     GLRenderer_drawPixels(currentRenderer, width, height, format, type, pixels);
     RING_READ_END(context->serverRing);
 }
@@ -888,6 +897,7 @@ void gd_handle_glDrawRangeElements(GLContext* context) {
     GLsizei count = ArrayBuffer_getInt(&context->inputBuffer);
     GLenum type = ArrayBuffer_getInt(&context->inputBuffer);
 
+    GLRenderer_invalidatePixelReadCache(currentRenderer);
     ShaderConverter_updateBoundProgram();
     void* indices = NULL;
     if (readUnboundVertexArrays(context, mode, count, &indices, type)) return;
@@ -902,6 +912,7 @@ void gd_handle_glDrawRangeElementsBaseVertex(GLContext* context) {
     GLenum type = ArrayBuffer_getInt(&context->inputBuffer);
     GLint basevertex = ArrayBuffer_getInt(&context->inputBuffer);
 
+    GLRenderer_invalidatePixelReadCache(currentRenderer);
     ShaderConverter_updateBoundProgram();
     void* indices = NULL;
     if (readUnboundVertexArrays(context, mode, count, &indices, type)) return;
@@ -3140,11 +3151,17 @@ void gd_handle_glVertexAttrib4Nub(GLContext* context) {
     GLubyte z = ArrayBuffer_get(&context->inputBuffer);
     GLubyte w = ArrayBuffer_get(&context->inputBuffer);
 
-    println(MSG_DEBUG_UNIMPLEMENTED_FUNC, "glVertexAttrib4Nub");
+    // wined3d 的 generic_d3dcolor 用本函数设置立即模式顶点色；GLES 无 glVertexAttrib4Nub，
+    // 用 4f 按 Nub 语义（归一化）等价实现（wined3d 已按 RGBA 顺序提取分量）。
+    // 原实现为空函数，会使依赖立即模式顶点色的绘制取到默认值。
+    glVertexAttrib4f(index, x / 255.0f, y / 255.0f, z / 255.0f, w / 255.0f);
 }
 
 void gd_handle_glVertexAttrib4Nubv(GLContext* context) {
-    println(MSG_DEBUG_UNIMPLEMENTED_FUNC, "glVertexAttrib4Nubv");
+    GLuint index = ArrayBuffer_getInt(&context->inputBuffer);
+    GLubyte* v = (GLubyte*)ArrayBuffer_getBytes(&context->inputBuffer, 4);
+
+    glVertexAttrib4f(index, v[0] / 255.0f, v[1] / 255.0f, v[2] / 255.0f, v[3] / 255.0f);
 }
 
 void gd_handle_glVertexAttrib4Nuiv(GLContext* context) {

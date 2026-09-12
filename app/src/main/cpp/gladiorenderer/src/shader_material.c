@@ -124,6 +124,11 @@ static const char* getVertexShaderHead() {
         "out vec3 gd_TotalSpecularLight;\n"
 
         "float getLightAttenuation(Light light, vec3 viewPosition) {\n"
+            /* GL 规范：方向光（w=0）在无穷远，衰减恒为 1；只有位置光按距离衰减。
+               原实现不区分 w，方向光的 position.xyz 是单位方向向量，与顶点眼坐标的
+               "距离"≈顶点到原点距离（2000~4000），导致主光源被衰减几千倍
+               （WC3 整体偏暗 3.5 倍的根因，2026-09-12 探针实锤）。 */
+            "if (light.position.w <= 0.0) return 1.0;\n"
             "float distance = length(light.position.xyz - viewPosition);\n"
             "return 1.0 / (light.attenuation.x + light.attenuation.y * distance + light.attenuation.z * (distance * distance));\n"
         "}\n"
@@ -199,7 +204,8 @@ static const char* getVertexShaderBody() {
                 "gd_TotalDiffuseLight += diffuse * lights[i].diffuse * materials[face].diffuse * spotIntensity * attenuation;\n"
 
                 "vec3 lightVector = normalize(lightDirection + viewDirection);\n"
-                "float specular = pow(clamp(dot(mvNormal, lightVector), 0.0, 1.0), shininess);\n"
+                "float specularDot = clamp(dot(mvNormal, lightVector), 0.0, 1.0);\n"
+                "float specular = specularDot > 0.0 ? pow(specularDot, shininess) : 0.0;\n"
                 "gd_TotalSpecularLight += specular * lights[i].specular * materials[face].specular.rgb * spotIntensity * attenuation;\n"
             "}\n"
 

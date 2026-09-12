@@ -60,12 +60,26 @@ static void getInstructionMap(ArrayMap* instructionMap) {
 static ARBUniform* parseARBUniform(char* string) {
     ARBUniform* uniform = calloc(1, sizeof(ARBUniform));
     uniform->location = -1;
+    int index = -1;
     if (strstr(string, "vec4")) {
-        uniform->type = ARB_UNIFORM_TYPE_CONST;
-        sscanf(string, "vec4(%f, %f, %f, %f)", &uniform->value[0], &uniform->value[1], &uniform->value[2], &uniform->value[3]);
+        // 仅当 4 个分量都能解析为数字时才是内联常量 vec4(1.0, 0.0, 0.0, 1.0)；
+        // 解析失败说明是 vec4(gd_ProgramLocalN[i], ...) 这类被花括号包装的引用，
+        // 必须按引用识别，否则常量值恒为 0（原实现无条件按 CONST 解析，且 sscanf 失败静默保持 0）。
+        if (sscanf(string, "vec4(%f, %f, %f, %f)", &uniform->value[0], &uniform->value[1], &uniform->value[2], &uniform->value[3]) == 4) {
+            uniform->type = ARB_UNIFORM_TYPE_CONST;
+        }
+        else if (sscanf(string, "vec4(gd_ProgramLocal0[%d]", &index) ||
+                 sscanf(string, "vec4(gd_ProgramLocal1[%d]", &index)) {
+            uniform->type = ARB_UNIFORM_TYPE_PROGRAM_LOCAL;
+            uniform->index = index;
+        }
+        else if (sscanf(string, "vec4(gd_ProgramEnv0[%d]", &index) ||
+                 sscanf(string, "vec4(gd_ProgramEnv1[%d]", &index)) {
+            uniform->type = ARB_UNIFORM_TYPE_PROGRAM_ENV;
+            uniform->index = index;
+        }
     }
     else {
-        int index;
         if (sscanf(string, "gd_ProgramLocal0[%d]", &index) ||
             sscanf(string, "gd_ProgramLocal1[%d]", &index)) {
             uniform->type = ARB_UNIFORM_TYPE_PROGRAM_LOCAL;
@@ -318,10 +332,10 @@ static void parseDataTypeQualifier(int type, char* line, ASMSource* asmSource, A
         }
         else {
             if (type == TYPE_QUALIFIER_PARAM) {
+                // 不再额外包一层 vec4(...)：parseInstOperand 对内联常量 {a,b,c,d} 已自行输出 vec4(...)，
+                // 再包一层会变成 vec4(vec4(...)) 使 parseARBUniform 解析失败、常量恒为 0。
                 ArrayBuffer string = {0};
-                ArrayBuffer_putString(&string, "vec4(");
                 parseInstOperand(operand, asmSource, &string);
-                ArrayBuffer_put(&string, ')');
                 ArrayBuffer_put(&string, '\0');
                 ArrayList_add(&variable->uniforms, parseARBUniform(string.buffer));
             }
@@ -563,10 +577,15 @@ static void iterateASMCodeLines(ArrayMap* instructionMap, ASMSource* asmSource, 
                         ArrayBuffer_putString(shaderCode, "%s = vec4(1.0, max(%s.x, 0.0), step(0.0, %s.x) * pow(max(%s.y, 0.0), clamp(%s.w, -128.0, 128.0)), 1.0);\n", dst, src[0], src[0], src[0], src[0]);
                         break;
                     case INST_LOG:
-                        ArrayBuffer_putString(shaderCode, "%s = vec4(pow(2.0, floor(log2(abs(%s.x)))), fract(log2(abs(%s.x))), log2(abs(%s.x)), 1.0);\n", dst, src[0], src[0], src[0]);
+                        // ARB 规范：dst = (floor(log2|x|), |x|/2^floor(log2|x|), log2|x|, 1)，
+                        // 其中 |x|/2^floor(log2|x|) == exp2(fract(log2|x|))。原实现 dst.x 少了 floor、dst.y 少了 exp2。
+                        ArrayBuffer_putString(shaderCode, "%s = vec4(floor(log2(abs(%s.x))), exp2(fract(log2(abs(%s.x)))), log2(abs(%s.x)), 1.0);\n", dst, src[0], src[0], src[0]);
                         break;
                     case INST_LRP:
-                        ArrayBuffer_putString(shaderCode, "%s = mix(%s, %s, %s)%s;\n", dst, src[0], src[1], src[2], dstMask);
+                        // ARB 规范：dst = src0*src2 + src1*(1-src2)；GLSL mix(x,y,a) = x*(1-a)+y*a，
+                        // 故需写作 mix(src1, src0, src2)。原实现写成 mix(src0, src1, src2) 使插值方向反转，
+                        // 依赖 LRP 的颜色混合（如 TSS BLEND 类操作）会得到相反的插值结果。
+                        ArrayBuffer_putString(shaderCode, "%s = mix(%s, %s, %s)%s;\n", dst, src[1], src[0], src[2], dstMask);
                         break;
                     case INST_MAD:
                         ArrayBuffer_putString(shaderCode, "%s = (%s * %s + %s)%s;\n", dst, src[0], src[1], src[2], dstMask);
@@ -596,13 +615,15 @@ static void iterateASMCodeLines(ArrayMap* instructionMap, ASMSource* asmSource, 
                         ArrayBuffer_putString(shaderCode, "%s = vec4(cos(%s.x), sin(%s.x), 0.0, 0.0);\n", dst, src[0], src[0]);
                         break;
                     case INST_SGE:
-                        ArrayBuffer_putString(shaderCode, "%s = vec4(greaterThanEqual(%s, %s))%s;\n", dst, src[0], src[0], dstMask);
+                        // 第二个比较数原为 src[0]（greaterThanEqual(x,x) 恒真），应为 src[1]
+                        ArrayBuffer_putString(shaderCode, "%s = vec4(greaterThanEqual(%s, %s))%s;\n", dst, src[0], src[1], dstMask);
                         break;
                     case INST_SIN:
                         APPEND_SCALAR_OP("sin");
                         break;
                     case INST_SLT:
-                        ArrayBuffer_putString(shaderCode, "%s = vec4(lessThan(%s, %s))%s;\n", dst, src[0], src[0], dstMask);
+                        // 第二个比较数原为 src[0]（lessThan(x,x) 恒假），应为 src[1]
+                        ArrayBuffer_putString(shaderCode, "%s = vec4(lessThan(%s, %s))%s;\n", dst, src[0], src[1], dstMask);
                         break;
                     case INST_SUB:
                         APPEND_ARITH_OP('-');

@@ -255,6 +255,7 @@ bool GLRenderer_useARBProgram(GLRenderer* renderer, bool fullUpdate) {
 
 void GLRenderer_drawImmediate(GLRenderer* renderer) {
     if (!renderer || ArrayDeque_isEmpty(&renderer->meshes)) return;
+    GLRenderer_invalidatePixelReadCache(renderer);
     GLClientState* clientState = &renderer->clientState;
 
     ShaderMaterial* material = NULL;
@@ -564,9 +565,12 @@ void GLRenderer_setLightParams(GLRenderer* renderer, GLenum id, GLenum pname, vo
                 vec3_apply_mat4(light->position, modelViewMatrix);
             }
             else {
-                float inverseMatrix[16];
-                mat4_inverse(inverseMatrix, modelViewMatrix);
-                vec3_transform_direction(light->position, inverseMatrix);
+                /* 方向光（w=0）：按 GL 规范用 modelview 的上 3×3 变换到眼空间
+                   （vec3_transform_direction 内部即 M·v 后归一化；平移项对 w=0 不起作用）。
+                   原来传 mat4_inverse → 算成 M⁻¹·v，方向光的照射方向错误、受光/背光面错位。
+                   注：WC3「整体偏暗」的主因是 getLightAttenuation 对方向光误算距离衰减
+                   （见 shader_material.c 的 A1），不在本处；本处只修方向正确性。 */
+                vec3_transform_direction(light->position, modelViewMatrix);
             }
             break;
         }
@@ -1350,6 +1354,17 @@ static void freePixelReadCache(GLRenderer* renderer) {
     }
 }
 
+void GLRenderer_invalidatePixelReadCache(GLRenderer* renderer) {
+    // 任何改变帧缓冲内容的操作（draw/clear/blit/drawPixels）都必须让像素读取缓存失效。
+    // 缓存只按 frameCount（swap 时递增）判新旧，而 PvZ 的 D3D 自检是"连续渲染多次、无 swap、
+    // 每次渲染后回读"：测试 1 回读填充缓存后，测试 2 的渲染不会递增 frameCount，导致其回读
+    // 命中缓存拿到测试 1 的像素，自检判 0x808080 期望不符 → 3D 加速被游戏禁用。
+    //
+    // 这里只标记失效、保留已分配的缓冲：draw 是高频操作，避免每次都 free、回读时再 malloc
+    // （缓存上限 256x256x4 = 256KB）；回读尺寸变化时 readPixels 会自行重新分配。
+    if (renderer->pixelReadCache) renderer->pixelReadCache->valid = false;
+}
+
 void GLRenderer_resetFrameCount(GLRenderer* renderer) {
     freePixelReadCache(renderer);
     renderer->frameCount = 0;
@@ -1359,7 +1374,7 @@ void GLRenderer_readPixels(GLRenderer* renderer, GLint x, GLint y, GLsizei width
     int srcDataSize = width * height * 4;
     GLuint framebuffer = renderer->clientState.framebuffer[indexOfGLTarget(GL_READ_FRAMEBUFFER)];
     PixelReadCache* pixelReadCache = renderer->pixelReadCache;
-    if (pixelReadCache && x == 0 && y == 0 &&
+    if (pixelReadCache && pixelReadCache->valid && x == 0 && y == 0 &&
                           pixelReadCache->dataSize == srcDataSize &&
                           pixelReadCache->framebuffer == framebuffer &&
                          (renderer->frameCount-pixelReadCache->frameIndex) <= PIXEL_READ_CACHE_SKIP_FRAMES) {
@@ -1383,6 +1398,7 @@ void GLRenderer_readPixels(GLRenderer* renderer, GLint x, GLint y, GLsizei width
         }
         pixelReadCache->framebuffer = framebuffer;
         pixelReadCache->frameIndex = renderer->frameCount;
+        pixelReadCache->valid = true;
         memcpy(pixelReadCache->data, srcData, srcDataSize);
     }
     else freePixelReadCache(renderer);
@@ -1437,10 +1453,15 @@ void GLRenderer_readPixels(GLRenderer* renderer, GLint x, GLint y, GLsizei width
                 }
                 break;
             case GL_BGRA:
+                // 注意：format==GL_BGRA 时 convert 为 false，dstData 与 srcData 是同一块内存，
+                // 必须先用临时变量取出 R/B 再写回，否则 dstData[i+2]=srcData[i+0] 读到的是
+                // 已被 dstData[i+0]=srcData[i+2] 覆盖后的 B 值，导致 R 通道丢失（红变黑、蓝变洋红）。
                 for (int i = 0; i < srcDataSize; i += 4) {
-                    dstData[i+0] = srcData[i+2];
+                    uint8_t r = srcData[i+0];
+                    uint8_t b = srcData[i+2];
+                    dstData[i+0] = b;
                     dstData[i+1] = srcData[i+1];
-                    dstData[i+2] = srcData[i+0];
+                    dstData[i+2] = r;
                     dstData[i+3] = srcData[i+3];
                 }
                 break;

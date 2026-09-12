@@ -17,3 +17,9 @@
 #}
 
 -dontobfuscate
+
+# Keep native methods: they are registered by name in JNI_OnLoad, so R8 must not
+# remove them (a shrunk method makes RegisterNatives fail and the app cannot start).
+-keepclasseswithmembers class * {
+    native <methods>;
+}
