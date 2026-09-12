@@ -192,7 +192,7 @@ index d94196a..472d27b 100644
 +    VkDevice dev = swapchain->device;
 +
 +    VkImageCreateInfo ii = {VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
-+    ii.imageType = VK_IMAGE_TYPE_2D; ii.extent = {w, h, 1};
++    ii.imageType = VK_IMAGE_TYPE_2D; ii.extent = (VkExtent3D){w, h, 1};
 +    ii.mipLevels = 1; ii.arrayLayers = 1; ii.format = fmt;
 +    ii.tiling = VK_IMAGE_TILING_OPTIMAL; ii.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 +    // STORAGE: win-fg 写入目标; SAMPLED: 可能被采样; TRANSFER: blit 用
@@ -211,7 +211,7 @@ index d94196a..472d27b 100644
 +
 +    VkImageViewCreateInfo vi = {VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
 +    vi.image = swapchain->genImage; vi.viewType = VK_IMAGE_VIEW_TYPE_2D; vi.format = fmt;
-+    vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
++    vi.subresourceRange = (VkImageSubresourceRange){VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
 +    if (vulkanWrapper.vkCreateImageView(dev, &vi, NULL, &swapchain->genView) != VK_SUCCESS) return false;
 +    return true;
 +}
@@ -253,7 +253,7 @@ index d94196a..472d27b 100644
 +    b.oldLayout = from; b.newLayout = to;
 +    b.srcAccessMask = src; b.dstAccessMask = dst;
 +    b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-+    b.image = img; b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
++    b.image = img; b.subresourceRange = (VkImageSubresourceRange){VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
 +    vulkanWrapper.vkCmdPipelineBarrier(cmd,
 +        VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
 +        0, 0, NULL, 0, NULL, 1, &b);
@@ -399,9 +399,9 @@ index d94196a..472d27b 100644
 +                       VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
 +                       VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_TRANSFER_READ_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
 +            VkImageCopy region = {0};
-+            region.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-+            region.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-+            region.extent = {w, h, 1};
++            region.srcSubresource = (VkImageSubresourceLayers){VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
++            region.dstSubresource = (VkImageSubresourceLayers){VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
++            region.extent = (VkExtent3D){w, h, 1};
 +            vulkanWrapper.vkCmdCopyImage(swapchain->cmdBuffer,
 +                                         swapchain->genImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
 +                                         srcImg, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
@@ -513,7 +513,7 @@ index 0000000..a771553
 +    b.srcAccessMask = src; b.dstAccessMask = dst;
 +    b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
 +    b.image = img;
-+    b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
++    b.subresourceRange = (VkImageSubresourceRange){VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
 +    return b;
 +}
 +
@@ -628,7 +628,7 @@ index 0000000..a771553
 +
 +    bool makeSlot(Slot& s, uint32_t w, uint32_t h, VkFormat fmt) {
 +        VkImageCreateInfo ii{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
-+        ii.imageType = VK_IMAGE_TYPE_2D; ii.extent = {w, h, 1};
++        ii.imageType = VK_IMAGE_TYPE_2D; ii.extent = (VkExtent3D){w, h, 1};
 +        ii.mipLevels = 1; ii.arrayLayers = 1; ii.format = fmt;
 +        ii.tiling = VK_IMAGE_TILING_OPTIMAL; ii.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 +        ii.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
@@ -642,7 +642,7 @@ index 0000000..a771553
 +        dd.BindImageMemory(dev, s.image, s.mem, 0);
 +        VkImageViewCreateInfo vi{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
 +        vi.image = s.image; vi.viewType = VK_IMAGE_VIEW_TYPE_2D; vi.format = fmt;
-+        vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
++        vi.subresourceRange = (VkImageSubresourceRange){VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
 +        if (dd.CreateImageView(dev, &vi, nullptr, &s.view) != VK_SUCCESS) { destroySlot(s); return false; }
 +        s.valid = false;
 +        return true;
@@ -744,9 +744,9 @@ index 0000000..a771553
 +        VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 2, pre);
 +
 +    VkImageCopy region{};
-+    region.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-+    region.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-+    region.extent = {w, h, 1};
++    region.srcSubresource = (VkImageSubresourceLayers){VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
++    region.dstSubresource = (VkImageSubresourceLayers){VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
++    region.extent = (VkExtent3D){w, h, 1};
 +    e->dd.CmdCopyImage(cmd, source, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
 +                       dst.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
 +
@@ -811,9 +811,9 @@ index 0000000..a771553
 +        VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 2, pre);
 +
 +    VkImageCopy region{};
-+    region.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-+    region.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-+    region.extent = {w, h, 1};
++    region.srcSubresource = (VkImageSubresourceLayers){VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
++    region.dstSubresource = (VkImageSubresourceLayers){VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
++    region.extent = (VkExtent3D){w, h, 1};
 +    e->dd.CmdCopyImage(cmd, curr.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
 +                       target, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
 +
