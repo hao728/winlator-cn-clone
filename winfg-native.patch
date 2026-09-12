@@ -6,8 +6,8 @@ index 0e7920d..a18b32c 100644
  project(VortekRenderer)
  
  set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -O2 -Wno-unused-function -Wimplicit-function-declaration -DVK_USE_PLATFORM_ANDROID_KHR")
-+# win-fg 是 C++ 代码，需要 C++17
-+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O2 -std=c++17 -DVK_USE_PLATFORM_ANDROID_KHR")
++# win-fg 是 C++ 代码，需要 C++17；-fpermissive 让 C 头文件(vortek.h/thread_pool.h)里的 void* 隐式转换在 C++ 下降级为警告
++set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O2 -std=c++17 -fpermissive -DVK_USE_PLATFORM_ANDROID_KHR")
  
  include_directories(include)
  include_directories(../winlator/include)
