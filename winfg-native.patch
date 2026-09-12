@@ -1052,3 +1052,121 @@ index 1104f8e..bad9dec 100644
      <string name="enable_fxaa">Enable FXAA</string>
      <string name="brightness">Brightness</string>
      <string name="contrast">Contrast</string>
+
+diff --git a/app/src/main/cpp/vortekrenderer/include/vortek.h b/app/src/main/cpp/vortekrenderer/include/vortek.h
+index 5292644..53e3e15 100644
+--- a/app/src/main/cpp/vortekrenderer/include/vortek.h
++++ b/app/src/main/cpp/vortekrenderer/include/vortek.h
+@@ -141,7 +141,7 @@ extern RingBuffer* clientRing;
+ 
+ static inline void* findNextVkStructure(void* pNext, VkStructureType type) {
+     while (pNext) {
+-        VkBaseOutStructure* curr = pNext;
++        VkBaseOutStructure* curr = (VkBaseOutStructure*)pNext;
+         if (curr->sType == type) return pNext;
+         pNext = curr->pNext;
+     }
+@@ -153,7 +153,7 @@ static inline void* invertVkStructuresChain(void* pNext) {
+     void* pPrev = NULL;
+ 
+     while (pNext) {
+-        VkBaseOutStructure* curr = pNext;
++        VkBaseOutStructure* curr = (VkBaseOutStructure*)pNext;
+         pNext = curr->pNext;
+         curr->pNext = pPrev;
+         pPrev = curr;
+@@ -167,11 +167,11 @@ static inline void* removeNextVkStructure(void* pNext, VkStructureType type) {
+     void* pFirst = pNext;
+ 
+     while (pNext) {
+-        VkBaseOutStructure* curr = pNext;
++        VkBaseOutStructure* curr = (VkBaseOutStructure*)pNext;
+         pNext = curr->pNext;
+         if (curr->sType == type) {
+             if (prev) {
+-                prev->pNext = pNext;
++                prev->pNext = (VkBaseOutStructure*)pNext;
+             }
+             else pFirst = pNext;
+             break;
+diff --git a/app/src/main/cpp/winlator/include/thread_pool.h b/app/src/main/cpp/winlator/include/thread_pool.h
+index 869582c..32cc1dd 100644
+--- a/app/src/main/cpp/winlator/include/thread_pool.h
++++ b/app/src/main/cpp/winlator/include/thread_pool.h
+@@ -6,7 +6,7 @@
+ typedef struct ThreadPool_Task {
+     void (*func)(void* param);
+     void* param;
+-    void* next;
++    struct ThreadPool_Task* next;
+ } ThreadPool_Task;
+ 
+ typedef struct ThreadPool {
+@@ -35,7 +35,7 @@ static inline ThreadPool_Task* ThreadPool_getTask(ThreadPool* threadPool) {
+ }
+ 
+ static inline void* threadPoolWorker(void* param) {
+-    ThreadPool* threadPool = param;
++    ThreadPool* threadPool = (ThreadPool*)param;
+     ThreadPool_Task* task;
+ 
+     while (threadPool->running) {
+@@ -71,7 +71,7 @@ static inline void* threadPoolWorker(void* param) {
+ }
+ 
+ static inline ThreadPool* ThreadPool_init(int numThreads) {
+-    ThreadPool* threadPool = calloc(1, sizeof(ThreadPool));
++    ThreadPool* threadPool = (ThreadPool*)calloc(1, sizeof(ThreadPool));
+     threadPool->numThreads = numThreads;
+     threadPool->numThreadsWorking = 0;
+     threadPool->running = true;
+@@ -91,7 +91,7 @@ static inline ThreadPool* ThreadPool_init(int numThreads) {
+ }
+ 
+ static inline void ThreadPool_run(ThreadPool* threadPool, void (*func)(void*), void* param) {
+-    ThreadPool_Task* task = malloc(sizeof(ThreadPool_Task));
++    ThreadPool_Task* task = (ThreadPool_Task*)malloc(sizeof(ThreadPool_Task));
+     task->func = func;
+     task->param = param;
+     task->next = NULL;
+
+diff --git a/app/src/main/cpp/winlator/include/socket_utils.h b/app/src/main/cpp/winlator/include/socket_utils.h
+index 30aa767..f8fc40b 100644
+--- a/app/src/main/cpp/winlator/include/socket_utils.h
++++ b/app/src/main/cpp/winlator/include/socket_utils.h
+@@ -8,7 +8,7 @@
+ static inline int send_fds(int sockFd, int* fds, int numFds, void* data, int size) {
+     if (!data) size = 1;
+     char zero = 0;
+-    struct iovec iovmsg = {.iov_base = data ? data : &zero, .iov_len = size};
++    struct iovec iovmsg = {.iov_base = data ? data : &zero, .iov_len = (size_t)size};
+     struct {
+         struct cmsghdr align;
+         int fds[MAX_FDS];
+@@ -21,7 +21,7 @@ static inline int send_fds(int sockFd, int* fds, int numFds, void* data, int siz
+         .msg_iovlen = 1,
+         .msg_flags = 0,
+         .msg_control = &ctrlmsg,
+-        .msg_controllen = sizeof(struct cmsghdr) + numFds * sizeof(int)
++        .msg_controllen = (socklen_t)(sizeof(struct cmsghdr) + numFds * sizeof(int))
+     };
+ 
+     struct cmsghdr *cmsg = CMSG_FIRSTHDR(&msg);
+@@ -36,7 +36,7 @@ static inline int send_fds(int sockFd, int* fds, int numFds, void* data, int siz
+ static inline int recv_fds(int sockFd, int* outFds, int* outNumFds, void* outData, int size) {
+     if (!outData) size = 1;
+     char zero = 0;
+-    struct iovec iovmsg = {.iov_base = outData ? outData : &zero, .iov_len = size};
++    struct iovec iovmsg = {.iov_base = outData ? outData : &zero, .iov_len = (size_t)size};
+     struct {
+         struct cmsghdr align;
+         int fds[MAX_FDS];
+@@ -49,7 +49,7 @@ static inline int recv_fds(int sockFd, int* outFds, int* outNumFds, void* outDat
+         .msg_iovlen = 1,
+         .msg_flags = 0,
+         .msg_control = &ctrlmsg,
+-        .msg_controllen = sizeof(struct cmsghdr) + MAX_FDS * sizeof(int)
++        .msg_controllen = (socklen_t)(sizeof(struct cmsghdr) + MAX_FDS * sizeof(int))
+     };
+ 
+     *outNumFds = 0;
