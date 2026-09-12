@@ -565,9 +565,12 @@ void GLRenderer_setLightParams(GLRenderer* renderer, GLenum id, GLenum pname, vo
                 vec3_apply_mat4(light->position, modelViewMatrix);
             }
             else {
-                float inverseMatrix[16];
-                mat4_inverse(inverseMatrix, modelViewMatrix);
-                vec3_transform_direction(light->position, inverseMatrix);
+                /* 方向光（w=0）：按 GL 规范用 modelview 的上 3×3 变换到眼空间
+                   （vec3_transform_direction 内部即 M·v 后归一化；平移项对 w=0 不起作用）。
+                   原来传 mat4_inverse → 算成 M⁻¹·v，方向光的照射方向错误、受光/背光面错位。
+                   注：WC3「整体偏暗」的主因是 getLightAttenuation 对方向光误算距离衰减
+                   （见 shader_material.c 的 A1），不在本处；本处只修方向正确性。 */
+                vec3_transform_direction(light->position, modelViewMatrix);
             }
             break;
         }
