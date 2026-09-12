@@ -338,6 +338,9 @@ jobs:
             "https://raw.githubusercontent.com/The412Banner/win-fg/master/LICENSE" || true
           curl -fsSL -o app/src/main/cpp/winlator/winfg/NOTICE_FIDELITYFX_OPTICALFLOW.md \
             "https://raw.githubusercontent.com/The412Banner/win-fg/master/NOTICE_FIDELITYFX_OPTICALFLOW.md" || true
+          # vk_layer.h 是 Vulkan layer 接口头文件，NDK 不提供；framegen 不使用其内容，创建空 stub
+          mkdir -p app/src/main/cpp/winlator/winfg/vulkan
+          echo "// stub: vk_layer.h not needed for framegen (NDK does not ship it)" > app/src/main/cpp/winlator/winfg/vulkan/vk_layer.h
           ls -lh app/src/main/cpp/winlator/winfg/
           test -s app/src/main/cpp/winlator/winfg/framegen.cpp || { echo "::error::framegen.cpp 为空"; exit 1; }
           echo "WINFG_VERSION=${{ steps.winfg-check.outputs.winfg_version }}" >> $GITHUB_ENV
