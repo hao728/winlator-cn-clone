@@ -513,7 +513,7 @@ index 0000000..a771553
 +    b.srcAccessMask = src; b.dstAccessMask = dst;
 +    b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
 +    b.image = img;
-+    b.subresourceRange = (VkImageSubresourceRange){VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
++    b.subresourceRange = VkImageSubresourceRange{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
 +    return b;
 +}
 +
@@ -628,7 +628,7 @@ index 0000000..a771553
 +
 +    bool makeSlot(Slot& s, uint32_t w, uint32_t h, VkFormat fmt) {
 +        VkImageCreateInfo ii{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
-+        ii.imageType = VK_IMAGE_TYPE_2D; ii.extent = (VkExtent3D){w, h, 1};
++        ii.imageType = VK_IMAGE_TYPE_2D; ii.extent = VkExtent3D{w, h, 1};
 +        ii.mipLevels = 1; ii.arrayLayers = 1; ii.format = fmt;
 +        ii.tiling = VK_IMAGE_TILING_OPTIMAL; ii.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 +        ii.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
@@ -642,7 +642,7 @@ index 0000000..a771553
 +        dd.BindImageMemory(dev, s.image, s.mem, 0);
 +        VkImageViewCreateInfo vi{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
 +        vi.image = s.image; vi.viewType = VK_IMAGE_VIEW_TYPE_2D; vi.format = fmt;
-+        vi.subresourceRange = (VkImageSubresourceRange){VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
++        vi.subresourceRange = VkImageSubresourceRange{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
 +        if (dd.CreateImageView(dev, &vi, nullptr, &s.view) != VK_SUCCESS) { destroySlot(s); return false; }
 +        s.valid = false;
 +        return true;
@@ -744,9 +744,9 @@ index 0000000..a771553
 +        VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 2, pre);
 +
 +    VkImageCopy region{};
-+    region.srcSubresource = (VkImageSubresourceLayers){VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-+    region.dstSubresource = (VkImageSubresourceLayers){VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-+    region.extent = (VkExtent3D){w, h, 1};
++    region.srcSubresource = VkImageSubresourceLayers{VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
++    region.dstSubresource = VkImageSubresourceLayers{VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
++    region.extent = VkExtent3D{w, h, 1};
 +    e->dd.CmdCopyImage(cmd, source, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
 +                       dst.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
 +
@@ -811,9 +811,9 @@ index 0000000..a771553
 +        VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 2, pre);
 +
 +    VkImageCopy region{};
-+    region.srcSubresource = (VkImageSubresourceLayers){VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-+    region.dstSubresource = (VkImageSubresourceLayers){VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-+    region.extent = (VkExtent3D){w, h, 1};
++    region.srcSubresource = VkImageSubresourceLayers{VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
++    region.dstSubresource = VkImageSubresourceLayers{VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
++    region.extent = VkExtent3D{w, h, 1};
 +    e->dd.CmdCopyImage(cmd, curr.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
 +                       target, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
 +
@@ -1053,42 +1053,6 @@ index 1104f8e..bad9dec 100644
      <string name="brightness">Brightness</string>
      <string name="contrast">Contrast</string>
 
-diff --git a/app/src/main/cpp/vortekrenderer/include/vortek.h b/app/src/main/cpp/vortekrenderer/include/vortek.h
-index 5292644..53e3e15 100644
---- a/app/src/main/cpp/vortekrenderer/include/vortek.h
-+++ b/app/src/main/cpp/vortekrenderer/include/vortek.h
-@@ -141,7 +141,7 @@ extern RingBuffer* clientRing;
- 
- static inline void* findNextVkStructure(void* pNext, VkStructureType type) {
-     while (pNext) {
--        VkBaseOutStructure* curr = pNext;
-+        VkBaseOutStructure* curr = (VkBaseOutStructure*)pNext;
-         if (curr->sType == type) return pNext;
-         pNext = curr->pNext;
-     }
-@@ -153,7 +153,7 @@ static inline void* invertVkStructuresChain(void* pNext) {
-     void* pPrev = NULL;
- 
-     while (pNext) {
--        VkBaseOutStructure* curr = pNext;
-+        VkBaseOutStructure* curr = (VkBaseOutStructure*)pNext;
-         pNext = curr->pNext;
-         curr->pNext = pPrev;
-         pPrev = curr;
-@@ -167,11 +167,11 @@ static inline void* removeNextVkStructure(void* pNext, VkStructureType type) {
-     void* pFirst = pNext;
- 
-     while (pNext) {
--        VkBaseOutStructure* curr = pNext;
-+        VkBaseOutStructure* curr = (VkBaseOutStructure*)pNext;
-         pNext = curr->pNext;
-         if (curr->sType == type) {
-             if (prev) {
--                prev->pNext = pNext;
-+                prev->pNext = (VkBaseOutStructure*)pNext;
-             }
-             else pFirst = pNext;
-             break;
 diff --git a/app/src/main/cpp/winlator/include/thread_pool.h b/app/src/main/cpp/winlator/include/thread_pool.h
 index 869582c..32cc1dd 100644
 --- a/app/src/main/cpp/winlator/include/thread_pool.h
@@ -1170,3 +1134,137 @@ index 30aa767..f8fc40b 100644
      };
  
      *outNumFds = 0;
+
+diff --git a/app/src/main/cpp/vortekrenderer/include/vortek.h b/app/src/main/cpp/vortekrenderer/include/vortek.h
+index 5292644..232679e 100644
+--- a/app/src/main/cpp/vortekrenderer/include/vortek.h
++++ b/app/src/main/cpp/vortekrenderer/include/vortek.h
+@@ -141,7 +141,7 @@ extern RingBuffer* clientRing;
+ 
+ static inline void* findNextVkStructure(void* pNext, VkStructureType type) {
+     while (pNext) {
+-        VkBaseOutStructure* curr = pNext;
++        VkBaseOutStructure* curr = (VkBaseOutStructure*)pNext;
+         if (curr->sType == type) return pNext;
+         pNext = curr->pNext;
+     }
+@@ -153,9 +153,9 @@ static inline void* invertVkStructuresChain(void* pNext) {
+     void* pPrev = NULL;
+ 
+     while (pNext) {
+-        VkBaseOutStructure* curr = pNext;
++        VkBaseOutStructure* curr = (VkBaseOutStructure*)pNext;
+         pNext = curr->pNext;
+-        curr->pNext = pPrev;
++        curr->pNext = (VkBaseOutStructure*)pPrev;
+         pPrev = curr;
+     }
+ 
+@@ -167,11 +167,11 @@ static inline void* removeNextVkStructure(void* pNext, VkStructureType type) {
+     void* pFirst = pNext;
+ 
+     while (pNext) {
+-        VkBaseOutStructure* curr = pNext;
++        VkBaseOutStructure* curr = (VkBaseOutStructure*)pNext;
+         pNext = curr->pNext;
+         if (curr->sType == type) {
+             if (prev) {
+-                prev->pNext = pNext;
++                prev->pNext = (VkBaseOutStructure*)pNext;
+             }
+             else pFirst = pNext;
+             break;
+@@ -190,7 +190,7 @@ static inline void* vt_alloc(MemoryPool* memoryPool, int size) {
+         ArrayList_add(&memoryPool->allocationList, chunk);
+     }
+     else {
+-        chunk = memoryPool->data + memoryPool->size;
++        chunk = (char*)memoryPool->data + memoryPool->size;
+         memoryPool->size += size;
+     }
+ 
+@@ -255,7 +255,7 @@ static inline int vt_recv(RingBuffer* ring, char** inputBuffer, int* bufferSize,
+     int size = *(int*)(header + 4);
+ 
+     if (size > 0) {
+-        *inputBuffer = vt_alloc(memoryPool, size);
++        *inputBuffer = (char*)vt_alloc(memoryPool, size);
+         result = RingBuffer_read(ring, *inputBuffer, size);
+         if (!result) return VK_ERROR_DEVICE_LOST;
+     }
+diff --git a/app/src/main/cpp/vortekrenderer/include/vulkan_wrapper.h b/app/src/main/cpp/vortekrenderer/include/vulkan_wrapper.h
+index a3c10cb..cb6c8fb 100644
+--- a/app/src/main/cpp/vortekrenderer/include/vulkan_wrapper.h
++++ b/app/src/main/cpp/vortekrenderer/include/vulkan_wrapper.h
+@@ -5,6 +5,24 @@
+ 
+ #include "vortek.h"
+ 
++// === win-fg C++ 兼容层 ===
++// dlsym/vkGetXxxProcAddr 返回 void* 或通用函数指针，C++ 禁止隐式转换为具体 PFN_* 类型。
++// 定义带模板转换运算符的包装类型，让现有数百处字段赋值零改动；纯 C 编译路径仍为 void*。
++#ifdef __cplusplus
++struct VkAnyFuncPtr {
++    void* p;
++    template<typename T> inline operator T() const { return reinterpret_cast<T>(p); }
++};
++typedef VkAnyFuncPtr VkFuncResult;
++static inline VkFuncResult VkDlsym(void* handle, const char* sym) { return VkAnyFuncPtr{dlsym(handle, sym)}; }
++#define VK_FUNC_RESULT(fp) VkAnyFuncPtr{reinterpret_cast<void*>(fp)}
++#else
++typedef void* VkFuncResult;
++static inline void* VkDlsym(void* handle, const char* sym) { return dlsym(handle, sym); }
++#define VK_FUNC_RESULT(fp) ((void*)(fp))
++#endif
++// === end win-fg C++ 兼容层 ===
++
+ typedef struct VulkanWrapper {
+     PFN_vkGetDeviceProcAddr vkGetDeviceProcAddr;
+     PFN_vkGetInstanceProcAddr vkGetInstanceProcAddr;
+@@ -272,35 +290,35 @@ typedef struct VulkanWrapper {
+     PFN_vkGetShaderModuleCreateInfoIdentifierEXT vkGetShaderModuleCreateInfoIdentifier;
+ } VulkanWrapper;
+ 
+-static inline void* findVulkanInstanceFunc(VulkanWrapper* vulkanWrapper, VkInstance instance, char* name) {
++static inline VkFuncResult findVulkanInstanceFunc(VulkanWrapper* vulkanWrapper, VkInstance instance, char* name) {
+     char nameBuf[128];
+     const char* suffixes[] = {"", "KHR", "EXT"};
+     for (int i = 0; i < ARRAY_SIZE(suffixes); i++) {
+         sprintf(nameBuf, "%s%s", name, suffixes[i]);
+         PFN_vkVoidFunction voidFunc = vulkanWrapper->vkGetInstanceProcAddr(instance, nameBuf);
+-        if (voidFunc) return voidFunc;
++        if (voidFunc) return VK_FUNC_RESULT(voidFunc);
+     }
+-    return NULL;
++    return VK_FUNC_RESULT(NULL);
+ }
+ 
+-static inline void* findVulkanDeviceFunc(VulkanWrapper* vulkanWrapper, VkDevice device, char* name) {
++static inline VkFuncResult findVulkanDeviceFunc(VulkanWrapper* vulkanWrapper, VkDevice device, char* name) {
+     char nameBuf[128];
+     const char* suffixes[] = {"", "KHR", "EXT"};
+     for (int i = 0; i < ARRAY_SIZE(suffixes); i++) {
+         sprintf(nameBuf, "%s%s", name, suffixes[i]);
+         PFN_vkVoidFunction voidFunc = vulkanWrapper->vkGetDeviceProcAddr(device, nameBuf);
+-        if (voidFunc) return voidFunc;
++        if (voidFunc) return VK_FUNC_RESULT(voidFunc);
+     }
+-    return NULL;
++    return VK_FUNC_RESULT(NULL);
+ }
+ 
+ static inline void initVulkanWrapper(VulkanWrapper* vulkanWrapper, void* libvulkan) {
+     memset(vulkanWrapper, 0, sizeof(VulkanWrapper));
+-    vulkanWrapper->vkCreateInstance = dlsym(libvulkan, "vkCreateInstance");
+-    vulkanWrapper->vkEnumerateInstanceVersion = dlsym(libvulkan, "vkEnumerateInstanceVersion");
+-    vulkanWrapper->vkEnumerateInstanceExtensionProperties = dlsym(libvulkan, "vkEnumerateInstanceExtensionProperties");
+-    vulkanWrapper->vkGetInstanceProcAddr = dlsym(libvulkan, "vkGetInstanceProcAddr");
+-    vulkanWrapper->vkGetDeviceProcAddr = dlsym(libvulkan, "vkGetDeviceProcAddr");
++    vulkanWrapper->vkCreateInstance = VkDlsym(libvulkan, "vkCreateInstance");
++    vulkanWrapper->vkEnumerateInstanceVersion = VkDlsym(libvulkan, "vkEnumerateInstanceVersion");
++    vulkanWrapper->vkEnumerateInstanceExtensionProperties = VkDlsym(libvulkan, "vkEnumerateInstanceExtensionProperties");
++    vulkanWrapper->vkGetInstanceProcAddr = VkDlsym(libvulkan, "vkGetInstanceProcAddr");
++    vulkanWrapper->vkGetDeviceProcAddr = VkDlsym(libvulkan, "vkGetDeviceProcAddr");
+ }
+ 
+ static inline void loadVulkanInstanceFuncs(VulkanWrapper* vulkanWrapper, VkInstance instance) {
