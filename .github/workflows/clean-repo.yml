@@ -1,17 +1,16 @@
 # ============================================================
-# 仓库清洗 v3（squash 不碰 workflow，绕过 GITHUB_TOKEN 限制）
-# 原理：squash 提交把 .github/workflows/ 恢复为根提交版本，
-#   相对根提交的 diff 不包含任何 workflow 变更 → force push 不被拒
-# squash 成功后，用户手动上传改好的 workflow 文件（winlator-workflow-fix.zip）
+# 仓库清洗 v4（用 PAT_TOKEN force push，一次性完成）
+# PAT 需具备 repo + workflow scope
+# 跑完后本文件已从提交中排除
 # 回滚：网页端新建分支指向 tag pre-clean-backup
 # ============================================================
-name: 仓库清洗 v3
+name: 仓库清洗 v4
 
 on:
   workflow_dispatch:
 
 concurrency:
-  group: clean-repo-v3
+  group: clean-repo-v4
   cancel-in-progress: false
 
 permissions:
@@ -26,10 +25,17 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: 配置 git
+      - name: 配置 git 与 PAT
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          # 用 PAT 配置 remote（PAT 有 repo + workflow scope，可 force push + 改 workflow）
+          git remote set-url origin "https://x-access-token:${{ secrets.PAT_TOKEN }}@github.com/${GITHUB_REPOSITORY}.git"
+          # 验证 PAT 有效性
+          git ls-remote origin main > /dev/null && echo "✅ PAT 认证有效" || {
+            echo "::error::PAT_TOKEN 无效或权限不足，请确认 PAT 有 repo scope（改 workflow 还需 workflow scope）"
+            exit 1
+          }
 
       # ===== 1. 备份 tag =====
       - name: 打备份 tag
@@ -38,35 +44,30 @@ jobs:
           git push -f origin pre-clean-backup
           echo "✅ 备份 tag pre-clean-backup 已创建"
 
-      # ===== 2. 确定根提交 =====
-      - name: 确定根提交
-        id: root
+      # ===== 2. 清理残留工作流 + 升级 actions + 消除重复发布 =====
+      - name: 清理工作流文件
+        run: |
+          # 删除残留调试工作流
+          rm -f .github/workflows/android-ci.yml
+          rm -f .github/workflows/build-native.yml
+          # 自我删除（本工作流完成使命）
+          rm -f .github/workflows/clean-repo.yml
+          rm -f .github/workflows/clean-repo-v2.yml
+          rm -f .github/workflows/clean-repo-v3.yml
+          rm -f .github/workflows/clean-repo-v4.yml
+          # 升级 setup-java v4 → v5
+          sed -i 's|actions/setup-java@v4|actions/setup-java@v5|' .github/workflows/build-coexist.yml .github/workflows/sync-upstream.yml
+          # 消除重复发布：build-coexist 去掉 tags 触发
+          sed -i "/tags: \['v\*'\]/d" .github/workflows/build-coexist.yml
+          echo "=== 清理后工作流列表 ==="
+          ls .github/workflows/
+
+      # ===== 3. Squash 历史（bfm-zh 验证方案）=====
+      - name: Squash 全部历史
         run: |
           FIRST=$(git rev-list --max-parents=0 HEAD | head -1)
           echo "根提交: $FIRST"
-          echo "first=$FIRST" >> $GITHUB_OUTPUT
           echo "清洗前提交数: $(git rev-list --count HEAD)"
-
-      # ===== 3. 关键：把 workflow 恢复为根提交版本（squash 不碰 workflow）=====
-      - name: 恢复 workflow 到根提交版本
-        run: |
-          FIRST="${{ steps.root.outputs.first }}"
-          # 恢复 .github/workflows/ 为根提交版本（squash 提交不包含 workflow 变更）
-          git checkout "$FIRST" -- .github/workflows/ 2>/dev/null || true
-          echo "=== 恢复后的 workflow 文件 ==="
-          ls -la .github/workflows/
-          echo "=== 确认 workflow 与根提交无差异 ==="
-          if git diff --quiet "$FIRST" -- .github/workflows/; then
-            echo "✓ 无差异（force push 安全）"
-          else
-            echo "⚠️ 有差异，列出如下："
-            git diff --name-only "$FIRST" -- .github/workflows/
-          fi
-
-      # ===== 4. Squash 历史 =====
-      - name: Squash 全部历史
-        run: |
-          FIRST="${{ steps.root.outputs.first }}"
           git reset --soft "$FIRST"
           git add -A
           git commit \
@@ -77,15 +78,8 @@ jobs:
             -m "- 中文界面与文档"
           echo "清洗后提交数: $(git rev-list --count HEAD)"
           git log --oneline
-          echo "=== 确认 squash 提交不包含 workflow 变更 ==="
-          if git diff --quiet HEAD~1 HEAD -- .github/workflows/; then
-            echo "✓ 无 workflow 变更（force push 安全）"
-          else
-            echo "⚠️ 有 workflow 变更："
-            git diff --name-only HEAD~1 HEAD -- .github/workflows/
-          fi
 
-      # ===== 5. Force push（捕获真实错误）=====
+      # ===== 4. Force push（用 PAT）=====
       - name: 强制推送 main
         run: |
           set +e
@@ -93,10 +87,10 @@ jobs:
           PUSH_CODE=$?
           echo "=== git push 输出 ==="
           echo "$PUSH_OUT"
-          echo "=== exit code: $PUSH_CODE ==="
           if [ $PUSH_CODE -ne 0 ]; then
             echo "::error::force push 失败，exit code=$PUSH_CODE"
             echo "::error::真实错误: $PUSH_OUT"
+            echo "::error::请确认 PAT_TOKEN 有 repo + workflow scope，且未过期"
             echo "::error::恢复方法：网页端新建分支指向 pre-clean-backup tag"
             exit 1
           fi
@@ -105,13 +99,11 @@ jobs:
       - name: 结果汇总
         run: |
           echo "=============================================="
-          echo "✅ squash 完成"
+          echo "✅ 清洗全部完成"
           echo "  备份 tag: pre-clean-backup（完整历史锚点，勿删）"
+          echo "  残留工作流: 已删除 android-ci / build-native"
+          echo "  actions: setup-java 已升级 v5"
+          echo "  重复发布: build-coexist 不再响应 tag"
           echo "  历史: 已 squash（根提交 + 1 个定制提交）"
-          echo ""
-          echo "⚠️  下一步（用户手动，网页端）："
-          echo "  1. 删除 .github/workflows/android-ci.yml"
-          echo "  2. 删除 .github/workflows/build-native.yml"
-          echo "  3. 用 winlator-workflow-fix.zip 里的文件覆盖 build-coexist.yml 和 sync-upstream.yml"
-          echo "  （以上操作是用户身份，不受 GITHUB_TOKEN 限制）"
+          echo "  清洗工作流: 已自我删除"
           echo "=============================================="
