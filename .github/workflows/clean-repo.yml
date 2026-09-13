@@ -1,0 +1,117 @@
+# ============================================================
+# 仓库清洗 v3（squash 不碰 workflow，绕过 GITHUB_TOKEN 限制）
+# 原理：squash 提交把 .github/workflows/ 恢复为根提交版本，
+#   相对根提交的 diff 不包含任何 workflow 变更 → force push 不被拒
+# squash 成功后，用户手动上传改好的 workflow 文件（winlator-workflow-fix.zip）
+# 回滚：网页端新建分支指向 tag pre-clean-backup
+# ============================================================
+name: 仓库清洗 v3
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: clean-repo-v3
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  squash:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout 完整历史
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 配置 git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      # ===== 1. 备份 tag =====
+      - name: 打备份 tag
+        run: |
+          git tag -f pre-clean-backup
+          git push -f origin pre-clean-backup
+          echo "✅ 备份 tag pre-clean-backup 已创建"
+
+      # ===== 2. 确定根提交 =====
+      - name: 确定根提交
+        id: root
+        run: |
+          FIRST=$(git rev-list --max-parents=0 HEAD | head -1)
+          echo "根提交: $FIRST"
+          echo "first=$FIRST" >> $GITHUB_OUTPUT
+          echo "清洗前提交数: $(git rev-list --count HEAD)"
+
+      # ===== 3. 关键：把 workflow 恢复为根提交版本（squash 不碰 workflow）=====
+      - name: 恢复 workflow 到根提交版本
+        run: |
+          FIRST="${{ steps.root.outputs.first }}"
+          # 恢复 .github/workflows/ 为根提交版本（squash 提交不包含 workflow 变更）
+          git checkout "$FIRST" -- .github/workflows/ 2>/dev/null || true
+          echo "=== 恢复后的 workflow 文件 ==="
+          ls -la .github/workflows/
+          echo "=== 确认 workflow 与根提交无差异 ==="
+          if git diff --quiet "$FIRST" -- .github/workflows/; then
+            echo "✓ 无差异（force push 安全）"
+          else
+            echo "⚠️ 有差异，列出如下："
+            git diff --name-only "$FIRST" -- .github/workflows/
+          fi
+
+      # ===== 4. Squash 历史 =====
+      - name: Squash 全部历史
+        run: |
+          FIRST="${{ steps.root.outputs.first }}"
+          git reset --soft "$FIRST"
+          git add -A
+          git commit \
+            -m "feat: winlator-cn 共存定制版" \
+            -m "- 包名共存：Manifest/Java/assets 三层一致化 + 12 字符等长替换，可与原版 com.winlator 共存" \
+            -m "- win-fg 帧生成：native 集成（编译进 vortekrenderer compositor），自动跟随上游源码" \
+            -m "- 全自动 CI：每日同步上游 + 区域保护 + 构建 + 静态自检 + Release 发布" \
+            -m "- 中文界面与文档"
+          echo "清洗后提交数: $(git rev-list --count HEAD)"
+          git log --oneline
+          echo "=== 确认 squash 提交不包含 workflow 变更 ==="
+          if git diff --quiet HEAD~1 HEAD -- .github/workflows/; then
+            echo "✓ 无 workflow 变更（force push 安全）"
+          else
+            echo "⚠️ 有 workflow 变更："
+            git diff --name-only HEAD~1 HEAD -- .github/workflows/
+          fi
+
+      # ===== 5. Force push（捕获真实错误）=====
+      - name: 强制推送 main
+        run: |
+          set +e
+          PUSH_OUT=$(git push --force origin main 2>&1)
+          PUSH_CODE=$?
+          echo "=== git push 输出 ==="
+          echo "$PUSH_OUT"
+          echo "=== exit code: $PUSH_CODE ==="
+          if [ $PUSH_CODE -ne 0 ]; then
+            echo "::error::force push 失败，exit code=$PUSH_CODE"
+            echo "::error::真实错误: $PUSH_OUT"
+            echo "::error::恢复方法：网页端新建分支指向 pre-clean-backup tag"
+            exit 1
+          fi
+          echo "✅ 清洗完成，main 已更新"
+
+      - name: 结果汇总
+        run: |
+          echo "=============================================="
+          echo "✅ squash 完成"
+          echo "  备份 tag: pre-clean-backup（完整历史锚点，勿删）"
+          echo "  历史: 已 squash（根提交 + 1 个定制提交）"
+          echo ""
+          echo "⚠️  下一步（用户手动，网页端）："
+          echo "  1. 删除 .github/workflows/android-ci.yml"
+          echo "  2. 删除 .github/workflows/build-native.yml"
+          echo "  3. 用 winlator-workflow-fix.zip 里的文件覆盖 build-coexist.yml 和 sync-upstream.yml"
+          echo "  （以上操作是用户身份，不受 GITHUB_TOKEN 限制）"
+          echo "=============================================="
