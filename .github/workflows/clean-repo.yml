@@ -51,7 +51,10 @@ jobs:
           echo "清洗前 workflow 文件:"
           ls .github/workflows/
 
-          # 关键：物理删除工作树中的 workflow 目录，再从根提交恢复
+          # 关键：① 先清空 index 中的 workflow（防止 HEAD 多出的残留文件污染）
+          #       ② 再物理删除工作树 workflow 目录
+          #       ③ 最后从根提交恢复 4 个原始文件
+          git rm -r -f --cached .github/workflows/ >/dev/null 2>&1 || true
           rm -rf .github/workflows
           git checkout "$FIRST" -- .github/workflows/
 
