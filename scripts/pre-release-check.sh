@@ -96,6 +96,9 @@ fi
 
 # --- 5. native 库检查（5 个自有动态渲染器必须存在）---
 # 注意：libadrenotools 是静态库(.a)，链接进 vortekrenderer.so，不单独出现在 APK 中
+# 注意：不能用 "unzip -l | grep -q" 判断存在性——grep -q 命中即退出会导致 unzip
+#       收到 SIGPIPE，在 set -o pipefail 下整条管道返回 141，被 ! 反转为"缺失"，
+#       造成误报。改为 zipinfo -1 输出路径列表并完整消费（无提前退出）。
 REQUIRED_SO=(
   "lib/arm64-v8a/libwinlator.so"
   "lib/arm64-v8a/libgladiorenderer.so"
@@ -105,7 +108,7 @@ REQUIRED_SO=(
 )
 MISSING_SO=()
 for so in "${REQUIRED_SO[@]}"; do
-  if ! unzip -l "$APK_PATH" 2>/dev/null | grep -q "$so"; then
+  if [ -z "$(unzip -Z1 "$APK_PATH" 2>/dev/null | grep -F "$so")" ]; then
     MISSING_SO+=("$so")
   fi
 done
@@ -122,7 +125,7 @@ REQUIRED_ASSETS=(
 )
 MISSING_ASSETS=()
 for a in "${REQUIRED_ASSETS[@]}"; do
-  if ! unzip -l "$APK_PATH" 2>/dev/null | grep -q "$a"; then
+  if [ -z "$(unzip -Z1 "$APK_PATH" 2>/dev/null | grep -F "$a")" ]; then
     MISSING_ASSETS+=("$a")
   fi
 done
@@ -132,24 +135,27 @@ else
   check "缺少 assets: ${MISSING_ASSETS[*]}" 1
 fi
 
-# --- 6b. win-fg 帧生成引擎检查（assets/winfg/libwin_fg.so 必须存在且 > 1MB）---
-WINFG_SO="assets/winfg/libwin_fg.so"
-WINFG_MANIFEST="assets/winfg/VkLayer_win_framegen.json"
-if unzip -l "$APK_PATH" 2>/dev/null | grep -q "$WINFG_SO"; then
-  WINFG_SIZE=$(unzip -l "$APK_PATH" 2>/dev/null | grep "$WINFG_SO" | awk '{print $1}')
-  WINFG_MB=$((WINFG_SIZE / 1024 / 1024))
-  if [ "$WINFG_MB" -ge 1 ]; then
-    check "win-fg 帧生成引擎已集成 (libwin_fg.so ${WINFG_MB}MB)" 0
+# --- 6b. win-fg 帧生成引擎检查（native 集成模式：编译进 libvortekrenderer.so）---
+# Why: win-fg 采用 native 集成（参考 Bannerlator），源码编译进 host compositor
+#      libvortekrenderer.so，不再产生 assets/winfg/libwin_fg.so + layer manifest
+#      （guest-layer 方案已废弃，其生成帧会被 host compositor 丢弃）。
+# What: 提取 libvortekrenderer.so，用 strings 检查 win-fg 帧生成符号是否存在。
+# How:  回退到 guest-layer 方案时，恢复对 assets/winfg/libwin_fg.so 的检查即可。
+VORTEK_SO="lib/arm64-v8a/libvortekrenderer.so"
+if [ -n "$(unzip -Z1 "$APK_PATH" 2>/dev/null | grep -F "$VORTEK_SO")" ]; then
+  VORTEK_SIZE=$(unzip -l "$APK_PATH" 2>/dev/null | grep "$VORTEK_SO" | awk '{print $1}')
+  VORTEK_MB=$((VORTEK_SIZE / 1024 / 1024))
+  # 提取 .so 到临时文件再 strings（避免 unzip -p 管道在 pipefail 下 SIGPIPE 误报）
+  unzip -p "$APK_PATH" "$VORTEK_SO" > /tmp/vortekrenderer_check.so 2>/dev/null || true
+  WINFG_SYMS=$(strings /tmp/vortekrenderer_check.so 2>/dev/null | grep -cE "winfg|FrameGen|framegen" || true)
+  rm -f /tmp/vortekrenderer_check.so
+  if [ "${WINFG_SYMS:-0}" -ge 1 ]; then
+    check "win-fg 帧生成引擎已编译进 libvortekrenderer.so (${VORTEK_MB}MB，${WINFG_SYMS} 个 win-fg 符号)" 0
   else
-    check "win-fg libwin_fg.so 过小 (${WINFG_MB}MB < 1MB，下载可能失败)" 1
+    check "win-fg 符号未在 libvortekrenderer.so 中找到（native 集成可能未生效）" 1
   fi
 else
-  check "win-fg 帧生成引擎缺失 ($WINFG_SO 不在 APK 中)" 1
-fi
-if unzip -l "$APK_PATH" 2>/dev/null | grep -q "$WINFG_MANIFEST"; then
-  check "win-fg layer manifest 已集成" 0
-else
-  check "win-fg layer manifest 缺失" 1
+  check "libvortekrenderer.so 缺失（win-fg native 集成载体不存在）" 1
 fi
 
 # --- 7. APK 内 lib 目录总大小（确认 native 库不是空壳）---

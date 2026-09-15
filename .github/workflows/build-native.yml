@@ -27,21 +27,23 @@ jobs:
           with open('app/build.gradle', 'r') as f:
               result = f.readlines()
           # Find buildTypes block and add release after debug block ends
+          # 仅当 build.gradle 尚不存在 release 时才注入，避免重复定义导致构建失败
           in_build_types = False
           brace_count = 0
-          for i, line in enumerate(result):
-              if 'buildTypes' in line and '{' in line:
-                  in_build_types = True
-                  brace_count = 1
-                  continue
-              if in_build_types:
-                  brace_count += line.count('{')
-                  brace_count -= line.count('}')
-                  if brace_count == 1 and '}' in line and 'debug' not in line:
-                      result.insert(i+1, "        release {\n            minifyEnabled true\n            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'\n            ndk {\n                abiFilters 'arm64-v8a'\n            }\n        }\n")
-                      break
-                  if brace_count == 0:
-                      break
+          if not any('release {' in l for l in result):
+              for i, line in enumerate(result):
+                  if 'buildTypes' in line and '{' in line:
+                      in_build_types = True
+                      brace_count = 1
+                      continue
+                  if in_build_types:
+                      brace_count += line.count('{')
+                      brace_count -= line.count('}')
+                      if brace_count == 1 and '}' in line and 'debug' not in line:
+                          result.insert(i+1, "        release {\n            minifyEnabled true\n            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'\n            ndk {\n                abiFilters 'arm64-v8a'\n            }\n        }\n")
+                          break
+                      if brace_count == 0:
+                          break
           with open('app/build.gradle', 'w') as f:
               f.writelines(result)
           EOF

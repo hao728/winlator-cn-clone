@@ -57,6 +57,8 @@ import com.winlator.core.WineInstaller;
 import com.winlator.core.WineRegistryEditor;
 import com.winlator.core.WineThemeManager;
 import com.winlator.core.WineUtils;
+import com.winlator.core.WinFGConfig;
+import com.winlator.core.LogCaptureHelper;
 import com.winlator.inputcontrols.ControlsProfile;
 import com.winlator.inputcontrols.InputControlsManager;
 import com.winlator.widget.CPUListView;
@@ -191,6 +193,35 @@ public class ContainerDetailFragment extends Fragment {
         cpuListView.setCheckedCPUList(isEditMode() ? container.getCPUList(true) : Container.getFallbackCPUList());
         cpuListViewWoW64.setCheckedCPUList(isEditMode() ? container.getCPUListWoW64(true) : Container.getFallbackCPUList());
 
+        // ---- win-fg 帧生成 UI 初始化 ----
+        // Why: 从容器 envVars 读取 win-fg 配置，填充开关/档位/倍率/调试选项。
+        // What: 仅初始化 Advanced tab 中的 win-fg 控件，不改动其他逻辑。
+        // How:  删除此块即回退到无 UI 版本（envVars 中的 WIN_FG_ENABLE=1 仍生效）。
+        final CheckBox cbWinFGEnable = view.findViewById(R.id.CBWinFGEnable);
+        final Spinner sWinFGPerfPreset = view.findViewById(R.id.SWinFGPerfPreset);
+        final Spinner sWinFGMultiplier = view.findViewById(R.id.SWinFGMultiplier);
+        final CheckBox cbWinFGDebug = view.findViewById(R.id.CBWinFGDebug);
+        final android.widget.Button btWinFGCaptureLog = view.findViewById(R.id.BTWinFGCaptureLog);
+
+        WinFGConfig winFGConfig = WinFGConfig.fromEnvVars(
+            isEditMode() ? container.getEnvVars() : Container.DEFAULT_ENV_VARS
+        );
+        cbWinFGEnable.setChecked(winFGConfig.isEnabled());
+        sWinFGPerfPreset.setSelection(winFGConfig.getPerfPreset());
+        sWinFGMultiplier.setSelection(winFGConfig.getMultiplierIndex());
+        cbWinFGDebug.setChecked(winFGConfig.isDebug());
+
+        // 导出日志按钮
+        btWinFGCaptureLog.setOnClickListener((v) -> {
+            String path = LogCaptureHelper.capture(context);
+            if (path != null) {
+                AppUtils.showToast(context, "日志已保存: " + path);
+            } else {
+                AppUtils.showToast(context, "日志导出失败，请检查存储权限");
+            }
+        });
+        // ---- win-fg UI 初始化结束 ----
+
         createWineConfigurationTab(view);
         final EnvVarsView envVarsView = createEnvVarsTab(view);
         createWinComponentsTab(view, isEditMode() ? container.getWinComponents() : Container.DEFAULT_WINCOMPONENTS);
@@ -205,6 +236,18 @@ public class ContainerDetailFragment extends Fragment {
                 String name = etName.getText().toString();
                 String screenSize = getScreenSize(view);
                 String envVars = envVarsView.getEnvVars();
+
+                // ---- 应用 win-fg 帧生成配置到 envVars ----
+                // Why: 用户在 UI 中设置的开关/档位/倍率/调试需要写入容器环境变量。
+                // What: 用 WinFGConfig 工具类合并 WIN_FG_* 变量到 envVars 字符串。
+                // How:  删除此块即回退到默认 WIN_FG_ENABLE=1（无 UI 控制）。
+                WinFGConfig saveCfg = new WinFGConfig();
+                saveCfg.setEnabled(cbWinFGEnable.isChecked());
+                saveCfg.setPerfPreset(sWinFGPerfPreset.getSelectedItemPosition());
+                saveCfg.setMultiplier(WinFGConfig.MULTIPLIER_VALUES[sWinFGMultiplier.getSelectedItemPosition()]);
+                saveCfg.setDebug(cbWinFGDebug.isChecked());
+                envVars = saveCfg.apply(envVars);
+                // ---- win-fg 配置应用结束 ----
                 String graphicsDriver = graphicsDriverPicker.getGraphicsDriver();
                 String dxwrapper = dxwrapperPicker.getDXWrapper();
                 String dxwrapperConfig = dxwrapperPicker.getDXWrapperConfig();

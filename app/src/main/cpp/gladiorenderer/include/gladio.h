@@ -25,7 +25,9 @@
 #define GL_SERVER 1
 #endif
 
-#define MAX_LIGHTS 4
+/* GL 规范要求 GL_MAX_LIGHTS 至少为 8。原值 4 会导致 GL_LIGHT4~GL_LIGHT7 被静默丢弃
+   （setLightParams 中 index >= MAX_LIGHTS 直接 return），WC3 实际用到 GL_LIGHT7。 */
+#define MAX_LIGHTS 8
 #define MAX_TEXTURES 8
 #define MAX_TEXTURE_TARGETS 4
 #define MAX_FRAMEBUFFER_TARGETS 3

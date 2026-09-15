@@ -57,9 +57,11 @@ public class MainApplication extends Application {
         "RestoreProfiles",
         "Symlink",
         "WineFolder",
-        "AndroidRuntime",    // Java 崩溃
-        "DEBUG",             // native 崩溃 / tombstone（由 crash_dump 进程写，pid 与主进程不同）
-        "libc"               // abort、SIGSEGV 前的 libc 提示
+        "AndroidRuntime"     // Java 崩溃（仅主进程会崩，pid 即主进程 pid，无需再进白名单特殊放行）
+        // 注意：DEBUG / libc 不在白名单里放行 —— 崩溃 tombstone 由 crash_dump 进程写，
+        // pid 与主进程不同。若像普通 tag 一样按 pid==myPid 或白名单放行，
+        // 会把 crash buffer 里其它进程的旧崩溃记录一并写入。
+        // 改为在过滤循环里按 “Fatal signal” 行的崩溃 pid 精确判定，只保留主进程自己的崩溃。
     ));
 
     private static File getCrashLogFile() {
@@ -75,8 +77,9 @@ public class MainApplication extends Application {
         startLogcatCapture();
     }
 
-    // 设置页保存开关后调用：实时启动/停止 logcat 捕获，无需重启 App
-    public static void enableLogcatCapture(Context context) {
+    // 按当前开关状态同步 logcat 捕获：幂等，可随时调用（设置页保存后、Activity 恢复时）
+    // 冷启动时存储尚未就绪导致 startCapture 静默失败，靠界面恢复时重新同步来重试
+    public static void syncLogcatCapture(Context context) {
         boolean enabled = PreferenceManager.getDefaultSharedPreferences(context).getBoolean("save_logcat_to_file", false);
         if (enabled) {
             if (captureProcess != null) return; // 已在运行
@@ -88,11 +91,13 @@ public class MainApplication extends Application {
         }
     }
 
-    private static Process captureProcess = null;
+    private static volatile Process captureProcess = null;
+    private static volatile boolean captureStarting = false;
 
     private static void stopCapture() {
         Process process = captureProcess;
         captureProcess = null;
+        captureStarting = false;
         if (process != null) {
             try {
                 process.destroy();
@@ -108,7 +113,8 @@ public class MainApplication extends Application {
     }
 
     private static void startCapture(final Application app, final String logFileName) {
-        if (captureProcess != null) return;
+        if (captureProcess != null || captureStarting) return;
+        captureStarting = true;
         final File logFile = new File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), logFileName);
         final long maxSize = 20L * 1024 * 1024;
         final int myPid = android.os.Process.myPid();
@@ -119,22 +125,41 @@ public class MainApplication extends Application {
                     writer.write("filter: pid=" + myPid + " keep all, other processes tags = " + LOGCAT_TAG_WHITELIST + "\n");
                     writer.flush();
                 }
-                Process process = Runtime.getRuntime().exec(new String[]{"logcat", "-v", "threadtime"});
+                // -T 1 只从缓冲区最后一条开始输出，避免把上次运行的历史日志 dump 进新文件
+                Process process = Runtime.getRuntime().exec(new String[]{"logcat", "-v", "threadtime", "-T", "1"});
                 captureProcess = process;
                 InputStream input = process.getInputStream();
                 FileOutputStream fos = new FileOutputStream(logFile, true);
                 OutputStreamWriter writer = new OutputStreamWriter(fos, StandardCharsets.UTF_8);
                 BufferedReader reader = new BufferedReader(new InputStreamReader(input, StandardCharsets.UTF_8));
                 boolean keepCurrentLine = false;
+                boolean inOwnCrash = false; // 当前是否紧跟主进程(pid==myPid)的崩溃 tombstone 块
                 String line;
                 while ((line = reader.readLine()) != null) {
                     if (line.startsWith("---------")) continue; // beginning of main/system 分隔行
                     Matcher matcher = LOGCAT_LINE_PATTERN.matcher(line);
                     if (matcher.find()) {
-                        // 主进程日志全保留；其它进程只放行白名单 TAG
-                        keepCurrentLine = Integer.parseInt(matcher.group(1)) == myPid
-                            || LOGCAT_TAG_WHITELIST.contains(matcher.group(2));
+                        int pid = Integer.parseInt(matcher.group(1));
+                        String tag = matcher.group(2);
+                        if ("libc".equals(tag) && line.contains("Fatal signal")) {
+                            // 崩溃块开头。Android 崩溃 tombstone 第一行是 libc 的 Fatal signal，
+                            // 该行的 pid 就是崩溃进程。仅当崩溃进程 == 主进程时才保留，
+                            // 否则（crash buffer 里其他进程/历史崩溃）连后续 DEBUG 续行一起丢弃。
+                            inOwnCrash = pid == myPid;
+                            keepCurrentLine = inOwnCrash;
+                        }
+                        else if ("DEBUG".equals(tag)) {
+                            // DEBUG tombstone 由 crash_dump 进程写，pid 不是主进程，
+                            // 只能跟随 libc Fatal signal 行的判定结果，不能单独按 pid/白名单放行。
+                            keepCurrentLine = inOwnCrash;
+                        }
+                        else {
+                            // 常规日志：主进程全保留，其它进程按白名单放行。离开崩溃块。
+                            inOwnCrash = false;
+                            keepCurrentLine = pid == myPid || LOGCAT_TAG_WHITELIST.contains(tag);
+                        }
                     }
+                    // 无匹配（崩溃 tombstone 的多行续行，如寄存器 dump）沿用上一条的 keepCurrentLine
                     if (!keepCurrentLine) continue;
 
                     if (logFile.length() > maxSize) {
@@ -157,6 +182,7 @@ public class MainApplication extends Application {
             }
             finally {
                 captureProcess = null;
+                captureStarting = false;
             }
         }, "logcat-capture");
         thread.setDaemon(true);

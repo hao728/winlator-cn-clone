@@ -615,6 +615,69 @@
                         android:text="@string/system" />
                 </FrameLayout>
 
+                <!-- 帧生成 (win-fg) 设置区域 -->
+                <FrameLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp">
+
+                    <LinearLayout style="@style/FieldSet">
+                        <CheckBox
+                            android:id="@+id/CBWinFGEnable"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:text="启用帧生成 (win-fg)"
+                            android:textSize="14sp"
+                            android:checked="true" />
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="4dp"
+                            android:text="性能档位"
+                            android:textSize="12sp" />
+
+                        <Spinner
+                            style="@style/ComboBox"
+                            android:id="@+id/SWinFGPerfPreset"
+                            android:layout_width="match_parent"
+                            android:entries="@array/winfg_perf_preset_entries" />
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="4dp"
+                            android:text="插帧倍率"
+                            android:textSize="12sp" />
+
+                        <Spinner
+                            style="@style/ComboBox"
+                            android:id="@+id/SWinFGMultiplier"
+                            android:layout_width="match_parent"
+                            android:entries="@array/winfg_multiplier_entries" />
+
+                        <CheckBox
+                            android:id="@+id/CBWinFGDebug"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="4dp"
+                            android:text="调试模式（输出详细日志）"
+                            android:textSize="12sp" />
+
+                        <Button
+                            android:id="@+id/BTWinFGCaptureLog"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="8dp"
+                            android:text="导出 win-fg 调试日志"
+                            android:textSize="12sp" />
+                    </LinearLayout>
+
+                    <TextView
+                        style="@style/FieldSetLabel"
+                        android:text="帧生成" />
+                </FrameLayout>
+
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"

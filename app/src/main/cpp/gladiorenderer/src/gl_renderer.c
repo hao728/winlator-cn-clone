@@ -35,7 +35,9 @@ static void initMaterials(GLRenderer* renderer) {
     GLMaterial* materials = calloc(2, sizeof(GLMaterial));
 
     const float ambient[] = {0.2f, 0.2f, 0.2f};
-    const float diffuse[] = {0.8f, 0.8f, 0.8f};
+    /* 规范初值：GL_DIFFUSE = (0.8, 0.8, 0.8, 1.0)。alpha 必须显式写 1.0，
+       否则 calloc 出 0.0 会让光照下的物体在 SRC_ALPHA 混合时变成全透明。 */
+    const float diffuse[] = {0.8f, 0.8f, 0.8f, 1.0f};
 
     memcpy(materials[0].ambient, ambient, sizeof(ambient));
     memcpy(materials[0].diffuse, diffuse, sizeof(diffuse));
@@ -43,6 +45,26 @@ static void initMaterials(GLRenderer* renderer) {
     memcpy(materials[1].diffuse, diffuse, sizeof(diffuse));
 
     renderer->materials = materials;
+}
+
+void GLRenderer_getEffectiveVertexColor(const GLRenderer* renderer, float out[4]) {
+    memcpy(out, renderer->state.color, sizeof(renderer->state.color));
+    if (!renderer->state.lighting) return;
+
+    /* GL 规范（1.1 §2.12.2 及 glColorMaterial/glMaterial 手册页）：光照启用时，
+       顶点颜色的 A 分量取材质 diffuse 的 alpha，而不是 glColor 的 alpha。
+       取正面材质：gladio 未实现 GL_LIGHT_MODEL_TWO_SIDE，背面材质集不参与渲染。 */
+    if (renderer->state.colorMaterial.enabled && renderer->state.colorMaterial.mode == 0) {
+        /* 特例：应用只调了 glEnable(GL_COLOR_MATERIAL) 而从未调 glColorMaterial
+           （mode 为 calloc 的 0，非合法枚举值）。规范的 COLOR_MATERIAL_PARAMETER
+           默认值是 GL_AMBIENT_AND_DIFFUSE —— 本就用 glColor 的 RGBA 跟踪 diffuse，
+           其 alpha 就是 glColor 的 alpha；而 gladio 的 setMaterialParams 收到 pname=0
+           不匹配任何分支，材质根本不被更新。此时若改取材质 alpha 会让这类应用
+           丢失原本来自 glColor 的半透明，故保持 glColor 的 alpha。 */
+        return;
+    }
+    /* materials == NULL 表示 guest 从未调用过任何 glMaterial*，取规范材质 diffuse 初值的 alpha=1.0 */
+    out[3] = renderer->materials ? renderer->materials[0].diffuse[3] : 1.0f;
 }
 
 static void initLight(GLLight* light) {
@@ -145,8 +167,10 @@ static void updateVertexBuffers(GLRenderer* renderer, int* attribLocations) {
             bindVertexBuffer(renderer, renderer->bufferIds[2], attribLocations[COLOR_ARRAY_INDEX], 4, geometry->colors.size, geometry->colors.buffer);
         }
         else {
+            float vertexColor[4];
+            GLRenderer_getEffectiveVertexColor(renderer, vertexColor);
             GLRenderer_disableVertexAttribute(renderer, attribLocations[COLOR_ARRAY_INDEX]);
-            glVertexAttrib4fv(attribLocations[COLOR_ARRAY_INDEX], renderer->state.color);
+            glVertexAttrib4fv(attribLocations[COLOR_ARRAY_INDEX], vertexColor);
         }
     }
 
@@ -255,6 +279,7 @@ bool GLRenderer_useARBProgram(GLRenderer* renderer, bool fullUpdate) {
 
 void GLRenderer_drawImmediate(GLRenderer* renderer) {
     if (!renderer || ArrayDeque_isEmpty(&renderer->meshes)) return;
+    GLRenderer_invalidatePixelReadCache(renderer);
     GLClientState* clientState = &renderer->clientState;
 
     ShaderMaterial* material = NULL;
@@ -384,7 +409,11 @@ void GLRenderer_addVertex(GLRenderer* renderer, GLfloat x, GLfloat y, GLfloat z,
     ArrayBuffer_putFloat4(&renderer->geometry.vertices, x, y, z, w);
 
     if (renderer->geometry.colors.position > 0 || renderer->geometry.colors.size > 0) {
-        ArrayBuffer_putBytes(&renderer->geometry.colors, renderer->state.color, 4 * sizeof(float));
+        /* 逐顶点求值：COLOR_MATERIAL 启用时材质随 glColor 实时变化，
+           必须在此刻（该顶点的光照输入色）取材质 diffuse alpha，不能推迟到绘制时。 */
+        float vertexColor[4];
+        GLRenderer_getEffectiveVertexColor(renderer, vertexColor);
+        ArrayBuffer_putBytes(&renderer->geometry.colors, vertexColor, sizeof(vertexColor));
     }
 
     if (renderer->geometry.normals.position > 0) {
@@ -564,9 +593,12 @@ void GLRenderer_setLightParams(GLRenderer* renderer, GLenum id, GLenum pname, vo
                 vec3_apply_mat4(light->position, modelViewMatrix);
             }
             else {
-                float inverseMatrix[16];
-                mat4_inverse(inverseMatrix, modelViewMatrix);
-                vec3_transform_direction(light->position, inverseMatrix);
+                /* 方向光（w=0）：按 GL 规范用 modelview 的上 3×3 变换到眼空间
+                   （vec3_transform_direction 内部即 M·v 后归一化；平移项对 w=0 不起作用）。
+                   原来传 mat4_inverse → 算成 M⁻¹·v，方向光的照射方向错误、受光/背光面错位。
+                   注：WC3「整体偏暗」的主因是 getLightAttenuation 对方向光误算距离衰减
+                   （见 shader_material.c 的 A1），不在本处；本处只修方向正确性。 */
+                vec3_transform_direction(light->position, modelViewMatrix);
             }
             break;
         }
@@ -826,7 +858,14 @@ int GLRenderer_getParamsv(GLRenderer* renderer, GLenum pname, GLenum type, void*
             if (params) *(GLfloat*)params = renderer->state.fog.mode;
             break;
         case GL_CONTEXT_PROFILE_MASK:
-            if (params) *(GLint*)params = (GL_CONTEXT_CORE_PROFILE_BIT | GL_CONTEXT_COMPATIBILITY_PROFILE_BIT);
+            /* wined3d 依据 GL_CONTEXT_PROFILE_MASK 判断 core/legacy 上下文：
+             * 若返回 CORE_PROFILE_BIT，wined3d 会走 glGetStringi(GL_EXTENSIONS, i)
+             * 逐条枚举扩展（core profile 语义），而 gladio 未实现 glGetStringi，
+             * 导致 wined3d 解析不到任何扩展，feature level 判定全部失败
+             * （d3d9 报 "None of the requested D3D feature levels is supported"）。
+             * 返回 0 让 wined3d 判定为 legacy 上下文，改用 glGetString(GL_EXTENSIONS)
+             * 解析扩展（gladio 已实现），92 个扩展全部生效。 */
+            if (params) *(GLint*)params = 0;
             break;
         case GL_SHADE_MODEL:
             if (params) *(GLint*)params = renderer->state.shadeModel;
@@ -1045,8 +1084,10 @@ void GLRenderer_drawPixels(GLRenderer* renderer, GLsizei width, GLsizei height, 
     bindVertexBuffer(renderer, renderer->bufferIds[4], material->location.attributes[TEXCOORD_ARRAY_INDEX], 4, raster->quad.texCoords.size, raster->quad.texCoords.buffer);
 
     glBindBuffer(GL_ARRAY_BUFFER, renderer->bufferIds[3]);
+    float vertexColor[4];
+    GLRenderer_getEffectiveVertexColor(renderer, vertexColor);
     GLRenderer_disableVertexAttribute(renderer, material->location.attributes[COLOR_ARRAY_INDEX]);
-    glVertexAttrib4fv(material->location.attributes[COLOR_ARRAY_INDEX], renderer->state.color);
+    glVertexAttrib4fv(material->location.attributes[COLOR_ARRAY_INDEX], vertexColor);
 
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
     GLRenderer_disableUnusedVertexAttributes(renderer);
@@ -1343,6 +1384,17 @@ static void freePixelReadCache(GLRenderer* renderer) {
     }
 }
 
+void GLRenderer_invalidatePixelReadCache(GLRenderer* renderer) {
+    // 任何改变帧缓冲内容的操作（draw/clear/blit/drawPixels）都必须让像素读取缓存失效。
+    // 缓存只按 frameCount（swap 时递增）判新旧，而 PvZ 的 D3D 自检是"连续渲染多次、无 swap、
+    // 每次渲染后回读"：测试 1 回读填充缓存后，测试 2 的渲染不会递增 frameCount，导致其回读
+    // 命中缓存拿到测试 1 的像素，自检判 0x808080 期望不符 → 3D 加速被游戏禁用。
+    //
+    // 这里只标记失效、保留已分配的缓冲：draw 是高频操作，避免每次都 free、回读时再 malloc
+    // （缓存上限 256x256x4 = 256KB）；回读尺寸变化时 readPixels 会自行重新分配。
+    if (renderer->pixelReadCache) renderer->pixelReadCache->valid = false;
+}
+
 void GLRenderer_resetFrameCount(GLRenderer* renderer) {
     freePixelReadCache(renderer);
     renderer->frameCount = 0;
@@ -1352,7 +1404,7 @@ void GLRenderer_readPixels(GLRenderer* renderer, GLint x, GLint y, GLsizei width
     int srcDataSize = width * height * 4;
     GLuint framebuffer = renderer->clientState.framebuffer[indexOfGLTarget(GL_READ_FRAMEBUFFER)];
     PixelReadCache* pixelReadCache = renderer->pixelReadCache;
-    if (pixelReadCache && x == 0 && y == 0 &&
+    if (pixelReadCache && pixelReadCache->valid && x == 0 && y == 0 &&
                           pixelReadCache->dataSize == srcDataSize &&
                           pixelReadCache->framebuffer == framebuffer &&
                          (renderer->frameCount-pixelReadCache->frameIndex) <= PIXEL_READ_CACHE_SKIP_FRAMES) {
@@ -1376,6 +1428,7 @@ void GLRenderer_readPixels(GLRenderer* renderer, GLint x, GLint y, GLsizei width
         }
         pixelReadCache->framebuffer = framebuffer;
         pixelReadCache->frameIndex = renderer->frameCount;
+        pixelReadCache->valid = true;
         memcpy(pixelReadCache->data, srcData, srcDataSize);
     }
     else freePixelReadCache(renderer);
@@ -1430,10 +1483,15 @@ void GLRenderer_readPixels(GLRenderer* renderer, GLint x, GLint y, GLsizei width
                 }
                 break;
             case GL_BGRA:
+                // 注意：format==GL_BGRA 时 convert 为 false，dstData 与 srcData 是同一块内存，
+                // 必须先用临时变量取出 R/B 再写回，否则 dstData[i+2]=srcData[i+0] 读到的是
+                // 已被 dstData[i+0]=srcData[i+2] 覆盖后的 B 值，导致 R 通道丢失（红变黑、蓝变洋红）。
                 for (int i = 0; i < srcDataSize; i += 4) {
-                    dstData[i+0] = srcData[i+2];
+                    uint8_t r = srcData[i+0];
+                    uint8_t b = srcData[i+2];
+                    dstData[i+0] = b;
                     dstData[i+1] = srcData[i+1];
-                    dstData[i+2] = srcData[i+0];
+                    dstData[i+2] = r;
                     dstData[i+3] = srcData[i+3];
                 }
                 break;

@@ -1,0 +1,102 @@
+# ============================================================
+# 仓库清洗 v6（极简版：纯 squash，零文件变更）
+# 原理：git reset --soft 不动索引，squash 提交的 tree 与
+#       远程当前 HEAD 完全相同 → force push 时 GitHub 检查
+#       到零文件变更 → 不需要 workflows 权限 → GITHUB_TOKEN 即可
+# 跑完后 workflow 仍是远程当前状态，用户手动清理即可
+# 回滚：网页端新建分支指向 tag pre-clean-backup
+# ============================================================
+name: 仓库清洗 v6
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: clean-repo-v6
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  squash:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout 完整历史
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 配置 git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      # ===== 1. 备份 tag =====
+      - name: 打备份 tag
+        run: |
+          git tag -f pre-clean-backup
+          git push --force origin pre-clean-backup
+          echo "✅ 备份 tag pre-clean-backup 已创建"
+
+      # ===== 2. 纯 Squash（不碰任何文件）=====
+      - name: Squash 历史（零文件变更）
+        run: |
+          set -e
+          ORIG_HEAD=$(git rev-parse HEAD)
+          FIRST=$(git rev-list --max-parents=0 HEAD | head -1)
+          test -n "$FIRST" || { echo "::error::无法确定根提交"; exit 1; }
+          echo "原 HEAD: $ORIG_HEAD"
+          echo "根提交: $FIRST"
+          echo "清洗前提交数: $(git rev-list --count HEAD)"
+
+          # 纯 squash：reset --soft 不动索引，tree 保持与原 HEAD 完全一致
+          git reset --soft "$FIRST"
+          git commit \
+            -m "feat: winlator-cn 共存定制版" \
+            -m "- 包名共存：Manifest/Java/assets 三层一致化 + 12 字符等长替换，可与原版 com.winlator 共存" \
+            -m "- win-fg 帧生成：native 集成（编译进 vortekrenderer compositor），自动跟随上游源码" \
+            -m "- 全自动 CI：每日同步上游 + 区域保护 + 构建 + 静态自检 + Release 发布" \
+            -m "- 中文界面与文档"
+
+          # 关键验证：squash 提交的 tree 与原 HEAD 完全相同（零文件变更）
+          if git diff --quiet "$ORIG_HEAD" HEAD; then
+            echo "✓ squash 提交与原 HEAD 零文件变更（force push 安全）"
+          else
+            echo "::error::squash 提交与原 HEAD 有差异，不应发生："
+            git diff --name-only "$ORIG_HEAD" HEAD
+            exit 1
+          fi
+          echo "清洗后提交数: $(git rev-list --count HEAD)"
+          git log --oneline
+
+      # ===== 3. Force push =====
+      - name: 强制推送 main
+        run: |
+          set +e
+          PUSH_OUT=$(git push --force origin main 2>&1)
+          PUSH_CODE=$?
+          echo "=== git push 输出 ==="
+          echo "$PUSH_OUT"
+          if [ $PUSH_CODE -ne 0 ]; then
+            echo "::error::force push 失败：$PUSH_OUT"
+            echo "::error::恢复方法：网页端新建分支指向 pre-clean-backup tag"
+            exit 1
+          fi
+          echo "✅ 清洗完成，main 已更新"
+
+      - name: 结果汇总
+        run: |
+          echo "=============================================="
+          echo "✅ Squash 完成"
+          echo "  备份 tag: pre-clean-backup（完整历史锚点，勿删）"
+          echo "  历史: 根提交 + 1 个定制提交"
+          echo ""
+          echo "⚠️  下一步（用户手动，网页端，约 3 分钟）："
+          echo "  1. 删除 .github/workflows/android-ci.yml"
+          echo "  2. 删除 .github/workflows/build-native.yml"
+          echo "  3. 删除 .github/workflows/clean-repo.yml（如有）"
+          echo "  4. 删除 .github/workflows/clean-repo-v6.yml"
+          echo "  5. 用改好的 build-coexist.yml 和 sync-upstream.yml 覆盖上传"
+          echo "     （改好的文件在 winlator-workflow-fix.zip 中）"
+          echo "=============================================="
