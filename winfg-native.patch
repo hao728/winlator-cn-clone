@@ -1920,7 +1920,7 @@ index 1cd6cdc..0000000
 -    }
 -}
 diff --git a/app/src/main/java/com/winlator/XServerDisplayActivity.java b/app/src/main/java/com/winlator/XServerDisplayActivity.java
-index a455c58..a8ac204 100644
+index a455c58..0d90373 100644
 --- a/app/src/main/java/com/winlator/XServerDisplayActivity.java
 +++ b/app/src/main/java/com/winlator/XServerDisplayActivity.java
 @@ -18,9 +18,11 @@ import android.widget.ArrayAdapter;
@@ -1992,30 +1992,18 @@ index a455c58..a8ac204 100644
          rootFS = RootFS.find(this);
  
          if (!isGenerateWineprefix()) {
-@@ -430,6 +456,22 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
+@@ -430,6 +456,10 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
                  enterPictureInPictureMode(pipParams);
                  drawerLayout.closeDrawers();
                  break;
-+            case R.id.menu_item_winfg_multiplier:
-+                showWinFgMultiplierDialog();
-+                drawerLayout.closeDrawers();
-+                break;
-+            case R.id.menu_item_winfg_preset:
-+                showWinFgPresetDialog();
-+                drawerLayout.closeDrawers();
-+                break;
-+            case R.id.menu_item_winfg_frame_limit:
-+                showWinFgFrameLimitDialog();
-+                drawerLayout.closeDrawers();
-+                break;
-+            case R.id.menu_item_winfg_debug:
-+                showWinFgDebugDialog();
++            case R.id.menu_item_winfg_settings:
++                showWinFgSettingsDialog();
 +                drawerLayout.closeDrawers();
 +                break;
              case R.id.menu_item_logs:
                  debugDialog.show();
                  drawerLayout.closeDrawers();
-@@ -1216,4 +1258,100 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
+@@ -1216,4 +1246,110 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
          }
          else return false;
      }
@@ -2026,6 +2014,29 @@ index a455c58..a8ac204 100644
 +    // What: 单选对话框 → 写 preferences → JNI 同步 native，实时生效不重启。
 +    // How: 删除以下方法即回退到"仅开关"版本。
 +    // ============================================================================
++
++    private void showWinFgSettingsDialog() {
++        WinFGConfig cfg = WinFGConfig.fromPreferences(preferences);
++        String[] entries = {
++            getString(R.string.win_fg_multiplier) + ": " + WinFGConfig.MULTIPLIER_LABELS[cfg.getMultiplierIndex()],
++            getString(R.string.win_fg_perf_preset) + ": " + WinFGConfig.PRESET_LABELS[cfg.getPerfPreset()],
++            getString(R.string.win_fg_frame_limit) + ": " + WinFGConfig.FRAME_LIMIT_LABELS[cfg.getFrameLimitIndex()],
++            getString(R.string.win_fg_debug) + ": " + getString(cfg.isDebug() ? R.string.enabled : R.string.disabled)
++        };
++        new AlertDialog.Builder(this)
++            .setTitle(R.string.win_fg_settings)
++            .setItems(entries, (dialog, which) -> {
++                dialog.dismiss();
++                switch (which) {
++                    case 0: showWinFgMultiplierDialog(); break;
++                    case 1: showWinFgPresetDialog(); break;
++                    case 2: showWinFgFrameLimitDialog(); break;
++                    case 3: showWinFgDebugDialog(); break;
++                }
++            })
++            .setNegativeButton(R.string.cancel, null)
++            .show();
++    }
 +
 +    private void showWinFgMultiplierDialog() {
 +        WinFGConfig cfg = WinFGConfig.fromPreferences(preferences);
@@ -2091,28 +2102,15 @@ index a455c58..a8ac204 100644
 +            .show();
 +    }
 +
-+    /** 更新 win-fg 子菜单标题，实时显示当前值（如「倍率: 2x」「限帧: 30 FPS」） */
++    /** 更新 win-fg 设置入口标题，实时显示配置摘要（如「帧生成设置: 2x·性能·30FPS」） */
 +    private void updateWinFgMenuTitles(Menu menu, WinFGConfig cfg) {
 +        if (menu == null || cfg == null) return;
-+        MenuItem multItem = menu.findItem(R.id.menu_item_winfg_multiplier);
-+        if (multItem != null) {
-+            multItem.setTitle(getString(R.string.win_fg_multiplier) + ": " +
-+                              WinFGConfig.MULTIPLIER_LABELS[cfg.getMultiplierIndex()]);
-+        }
-+        MenuItem presetItem = menu.findItem(R.id.menu_item_winfg_preset);
-+        if (presetItem != null) {
-+            presetItem.setTitle(getString(R.string.win_fg_perf_preset) + ": " +
-+                                WinFGConfig.PRESET_LABELS[cfg.getPerfPreset()]);
-+        }
-+        MenuItem limitItem = menu.findItem(R.id.menu_item_winfg_frame_limit);
-+        if (limitItem != null) {
-+            limitItem.setTitle(getString(R.string.win_fg_frame_limit) + ": " +
-+                               WinFGConfig.FRAME_LIMIT_LABELS[cfg.getFrameLimitIndex()]);
-+        }
-+        MenuItem debugItem = menu.findItem(R.id.menu_item_winfg_debug);
-+        if (debugItem != null) {
-+            debugItem.setTitle(getString(R.string.win_fg_debug) + ": " +
-+                               getString(cfg.isDebug() ? R.string.enabled : R.string.disabled));
++        MenuItem settingsItem = menu.findItem(R.id.menu_item_winfg_settings);
++        if (settingsItem != null) {
++            settingsItem.setTitle(getString(R.string.win_fg_settings) + ": " +
++                                  WinFGConfig.MULTIPLIER_LABELS[cfg.getMultiplierIndex()] + "·" +
++                                  WinFGConfig.PRESET_LABELS[cfg.getPerfPreset()] + "·" +
++                                  WinFGConfig.FRAME_LIMIT_LABELS[cfg.getFrameLimitIndex()]);
 +        }
 +    }
  }
@@ -2136,7 +2134,7 @@ index 72b4db8..2d21212 100644
  
      public static class RestartApplicationOptions {
 diff --git a/app/src/main/java/com/winlator/core/WinFGConfig.java b/app/src/main/java/com/winlator/core/WinFGConfig.java
-index d4bcee0..3f2fca2 100644
+index d4bcee0..5dd65b7 100644
 --- a/app/src/main/java/com/winlator/core/WinFGConfig.java
 +++ b/app/src/main/java/com/winlator/core/WinFGConfig.java
 @@ -1,101 +1,108 @@
@@ -2200,8 +2198,8 @@ index d4bcee0..3f2fca2 100644
 -
 -    public WinFGConfig() {}
 +    // 帧率限制（限制真实帧速率后再插帧，才能看出帧生成提升）
-+    public static final int[] FRAME_LIMIT_VALUES = {0, 30, 45, 60};
-+    public static final String[] FRAME_LIMIT_LABELS = {"关闭", "30 FPS", "45 FPS", "60 FPS"};
++    public static final int[] FRAME_LIMIT_VALUES = {0, 24, 30, 40, 45, 60};
++    public static final String[] FRAME_LIMIT_LABELS = {"关闭", "24 FPS", "30 FPS", "40 FPS", "45 FPS", "60 FPS"};
 +
 +    private boolean enabled;
 +    private int multiplier;
@@ -2364,7 +2362,7 @@ index 9120e91..42d28fa 100644
 +    public static native boolean nativeIsWinFgEnabled();
  }
 diff --git a/app/src/main/res/menu/xserver_menu.xml b/app/src/main/res/menu/xserver_menu.xml
-index a471d4a..e120575 100644
+index a471d4a..76cedd4 100644
 --- a/app/src/main/res/menu/xserver_menu.xml
 +++ b/app/src/main/res/menu/xserver_menu.xml
 @@ -1,6 +1,7 @@
@@ -2376,7 +2374,7 @@ index a471d4a..e120575 100644
      <group android:checkableBehavior="none">
          <item android:icon="@drawable/icon_keyboard" android:id="@+id/menu_item_keyboard" android:title="@string/keyboard" />
          <item android:icon="@drawable/icon_input_controls" android:id="@+id/menu_item_input_controls" android:title="@string/input_controls" />
-@@ -8,6 +9,16 @@
+@@ -8,6 +9,15 @@
          <item android:icon="@drawable/icon_move" android:id="@+id/menu_item_move_cursor_to_touchpoint" android:title="@string/move_cursor_to_touchpoint" />
          <item android:icon="@drawable/icon_task_manager" android:id="@+id/menu_item_task_manager" android:title="@string/task_manager" />
          <item android:icon="@drawable/icon_active_windows" android:id="@+id/menu_item_active_windows" android:title="@string/active_windows" />
@@ -2385,19 +2383,18 @@ index a471d4a..e120575 100644
 +              android:id="@+id/menu_item_winfg"
 +              android:title="@string/win_fg_frame_gen"
 +              app:actionViewClass="android.widget.Switch" />
-+        <!-- win-fg 设置（运行时热更新，无需退出游戏） -->
-+        <item android:icon="@drawable/icon_screen_effect" android:id="@+id/menu_item_winfg_multiplier" android:title="@string/win_fg_multiplier" />
-+        <item android:icon="@drawable/icon_screen_effect" android:id="@+id/menu_item_winfg_preset" android:title="@string/win_fg_perf_preset" />
-+        <item android:icon="@drawable/icon_screen_effect" android:id="@+id/menu_item_winfg_frame_limit" android:title="@string/win_fg_frame_limit" />
-+        <item android:icon="@drawable/icon_debug" android:id="@+id/menu_item_winfg_debug" android:title="@string/win_fg_debug" />
++        <!-- win-fg 设置入口（点击弹出完整设置，节省菜单空间） -->
++        <item android:icon="@drawable/icon_screen_effect"
++              android:id="@+id/menu_item_winfg_settings"
++              android:title="@string/win_fg_settings" />
          <item android:icon="@drawable/icon_magnifier" android:id="@+id/menu_item_magnifier" android:title="@string/magnifier" />
          <item android:icon="@drawable/icon_screen_effect" android:id="@+id/menu_item_screen_effect" android:title="@string/screen_effect" />
          <item android:icon="@drawable/icon_pip_mode" android:id="@+id/menu_item_pip_mode" android:title="@string/pip_mode" />
 diff --git a/app/src/main/res/values-zh/strings.xml b/app/src/main/res/values-zh/strings.xml
-index f6eb9bf..58d2ead 100644
+index f6eb9bf..3f1b870 100644
 --- a/app/src/main/res/values-zh/strings.xml
 +++ b/app/src/main/res/values-zh/strings.xml
-@@ -342,6 +342,11 @@
+@@ -342,6 +342,12 @@
      <string name="opengl_version">OpenGL版本</string>
      <string name="disable_vertex_array_bgra">禁用顶点阵列BGRA</string>
      <string name="screen_effect">屏幕滤镜</string>
@@ -2405,15 +2402,16 @@ index f6eb9bf..58d2ead 100644
 +    <string name="win_fg_multiplier">插帧倍率</string>
 +    <string name="win_fg_perf_preset">质量档位</string>
 +    <string name="win_fg_frame_limit">帧率限制</string>
++    <string name="win_fg_settings">帧生成设置</string>
 +    <string name="win_fg_debug">帧生成调试日志</string>
      <string name="enable_fxaa">启用抗锯齿</string>
      <string name="brightness">亮度</string>
      <string name="contrast">对比度</string>
 diff --git a/app/src/main/res/values/strings.xml b/app/src/main/res/values/strings.xml
-index 43ab990..ffdb2df 100644
+index 43ab990..6a3a271 100644
 --- a/app/src/main/res/values/strings.xml
 +++ b/app/src/main/res/values/strings.xml
-@@ -344,6 +344,11 @@
+@@ -344,6 +344,12 @@
      <string name="opengl_version">OpenGL Version</string>
      <string name="disable_vertex_array_bgra">Disable vertex array BGRA</string>
      <string name="screen_effect">Screen Effect</string>
@@ -2421,6 +2419,7 @@ index 43ab990..ffdb2df 100644
 +    <string name="win_fg_multiplier">Interp Rate</string>
 +    <string name="win_fg_perf_preset">Quality Preset</string>
 +    <string name="win_fg_frame_limit">Frame Limit</string>
++    <string name="win_fg_settings">Frame Gen Settings</string>
 +    <string name="win_fg_debug">FG Debug Log</string>
      <string name="enable_fxaa">Enable FXAA</string>
      <string name="brightness">Brightness</string>
