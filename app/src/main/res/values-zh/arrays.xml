@@ -169,4 +169,10 @@
         <item>3倍</item>
         <item>4倍</item>
     </string-array>
+    <!-- Vulkan Present Mode 选项（上游 v33 新增，sync-upstream 时 arrays.xml 被 OURS 保护导致遗漏） -->
+    <string-array name="present_mode_entries">
+        <item>immediate</item>
+        <item>mailbox</item>
+        <item>fifo</item>
+    </string-array>
 </resources>
