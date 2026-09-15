@@ -134,8 +134,8 @@ public class MainApplication extends Application {
     }
 
     private void startLogcatCapture() {
-        boolean enabled = PreferenceManager.getDefaultSharedPreferences(this).getBoolean("save_logcat_to_file", false);
-        if (!enabled) return;
+        // 无条件启动日志捕获（用户需求：无需手动开关，自动写入 Download 目录）
+        // 设置里的 save_logcat_to_file 开关保留但不再作为前置条件，避免用户忘记开启导致无日志
         startCapture(this, LOGCAT_LOG_FILE_NAME);
     }
 
@@ -157,6 +157,8 @@ public class MainApplication extends Application {
                 try (OutputStreamWriter writer = new OutputStreamWriter(new FileOutputStream(logFile, append), StandardCharsets.UTF_8)) {
                     writer.write("========== logcat capture started " + new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(new Date()) + " ==========\n");
                     writer.write("filter: pid=" + myPid + " keep all, other processes tags = " + LOGCAT_TAG_WHITELIST + "\n");
+                    // 写入环境诊断报告（设备/rootfs/wine/容器/缺失组件），方便用户排查"windows 环境有无缺失"
+                    writeEnvironmentReport(app, writer);
                     writer.flush();
                 }
                 // 文件已成功打开并写下 header，本次进程的"重置"动作已完成。之后同一进程内
@@ -226,6 +228,93 @@ public class MainApplication extends Application {
         }, "logcat-capture");
         thread.setDaemon(true);
         thread.start();
+    }
+
+    /**
+     * 写入环境诊断报告到日志文件开头
+     * Why: 用户需要一眼看出 windows 环境有无缺失（rootfs/wine/box64/容器等）
+     * What: 设备信息 + 关键目录存在性检查 + Wine 版本列表 + 缺失汇总
+     * How: 仅在冷启动重置文件时写入一次，追加模式不重复写
+     */
+    private static void writeEnvironmentReport(Application app, OutputStreamWriter writer) throws IOException {
+        SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault());
+        writer.write("\n========== 环境诊断报告 " + sdf.format(new Date()) + " ==========\n");
+        // 设备信息
+        writer.write("设备: " + Build.MANUFACTURER + " " + Build.MODEL + "\n");
+        writer.write("系统: Android " + Build.VERSION.RELEASE + " (API " + Build.VERSION.SDK_INT + ")\n");
+        writer.write("CPU: " + (Build.SUPPORTED_ABIS.length > 0 ? Build.SUPPORTED_ABIS[0] : "unknown") + "\n");
+        // App 信息
+        try {
+            PackageInfo pInfo = app.getPackageManager().getPackageInfo(app.getPackageName(), 0);
+            writer.write("应用: WinlatorCN " + pInfo.versionName + " (" + pInfo.versionCode + ")\n");
+        } catch (Exception e) {
+            writer.write("应用: unknown\n");
+        }
+        writer.write("包名: " + app.getPackageName() + "\n");
+        writer.write("数据目录: " + app.getDataDir().getAbsolutePath() + "\n");
+        // 关键目录检查
+        writer.write("\n--- 关键目录检查 ---\n");
+        File filesDir = app.getFilesDir();
+        checkDir(writer, filesDir, "rootfs", "rootfs (Windows 根文件系统)");
+        checkDir(writer, filesDir, "wine", "wine (Wine 安装目录)");
+        checkDir(writer, filesDir, "box64", "box64 (x86_64 转译器)");
+        checkDir(writer, filesDir, "box86", "box86 (x86 转译器)");
+        // Wine 已安装版本
+        File wineDir = new File(filesDir, "wine");
+        if (wineDir.isDirectory()) {
+            File[] versions = wineDir.listFiles();
+            if (versions != null && versions.length > 0) {
+                writer.write("\n--- 已安装 Wine 版本 ---\n");
+                for (File v : versions) {
+                    if (v.isDirectory()) writer.write("- " + v.getName() + "\n");
+                }
+            }
+        }
+        // 缺失组件汇总
+        writer.write("\n--- 缺失组件汇总 ---\n");
+        boolean allOk = true;
+        for (String dir : new String[]{"rootfs", "wine"}) {
+            if (!new File(filesDir, dir).isDirectory()) {
+                writer.write("[缺失] " + dir + " — 首次启动需下载初始化\n");
+                allOk = false;
+            }
+        }
+        if (allOk) writer.write("[OK] 核心组件齐全\n");
+        writer.write("========================================\n\n");
+    }
+
+    /** 检查单个目录是否存在并写入状态 */
+    private static void checkDir(OutputStreamWriter writer, File parent, String name, String desc) throws IOException {
+        File dir = new File(parent, name);
+        if (dir.isDirectory()) {
+            long size = dirSize(dir);
+            writer.write("[存在] " + desc + " (" + name + ")");
+            if (size > 0) writer.write(" - " + formatSize(size));
+            writer.write("\n");
+        } else {
+            writer.write("[缺失] " + desc + " (" + name + ")\n");
+        }
+    }
+
+    /** 递归计算目录大小（只统计一层文件，避免 rootfs 遍历过久） */
+    private static long dirSize(File dir) {
+        long size = 0;
+        File[] files = dir.listFiles();
+        if (files != null) {
+            for (File f : files) {
+                if (f.isFile()) size += f.length();
+                // 不递归子目录，rootfs 太大
+            }
+        }
+        return size;
+    }
+
+    /** 字节数转人类可读格式 */
+    private static String formatSize(long bytes) {
+        if (bytes >= 1024L * 1024 * 1024) return String.format(Locale.getDefault(), "%.1fGB", bytes / (1024.0 * 1024 * 1024));
+        if (bytes >= 1024L * 1024) return String.format(Locale.getDefault(), "%.1fMB", bytes / (1024.0 * 1024));
+        if (bytes >= 1024) return String.format(Locale.getDefault(), "%.1fKB", bytes / 1024.0);
+        return bytes + "B";
     }
 
     private static class CrashHandler implements Thread.UncaughtExceptionHandler {
