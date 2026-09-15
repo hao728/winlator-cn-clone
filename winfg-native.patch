@@ -1,11 +1,12 @@
 diff --git a/app/build.gradle b/app/build.gradle
-index 40dc739..63ff043 100644
+index 40dc739..3f4a330 100644
 --- a/app/build.gradle
 +++ b/app/build.gradle
-@@ -78,4 +78,6 @@ dependencies {
+@@ -78,4 +78,7 @@ dependencies {
      implementation 'com.github.luben:zstd-jni:1.5.7-10@aar'
      implementation 'org.tukaani:xz:1.12'
      implementation 'org.apache.commons:commons-compress:1.28.0'
++    implementation 'androidx.lifecycle:lifecycle-process:2.5.1'  // 上游 v33 ForegroundService 用
 +    implementation 'androidx.lifecycle:lifecycle-process:2.5.1'  // 上游 v33 ForegroundService 用
 +    implementation 'androidx.lifecycle:lifecycle-process:2.5.1'  // 上游 v33 ForegroundService 用
  }
@@ -1275,10 +1276,10 @@ index 869582c..32cc1dd 100644
      task->next = NULL;
 diff --git a/app/src/main/cpp/winlator/winfg/winfg_bridge.cpp b/app/src/main/cpp/winlator/winfg/winfg_bridge.cpp
 new file mode 100644
-index 0000000..a771553
+index 0000000..291d8f4
 --- /dev/null
 +++ b/app/src/main/cpp/winlator/winfg/winfg_bridge.cpp
-@@ -0,0 +1,372 @@
+@@ -0,0 +1,380 @@
 +// ============================================================================
 +// winfg_bridge.cpp — C++ 实现层
 +//
@@ -1641,6 +1642,14 @@ index 0000000..a771553
 +    e->history = 0;
 +}
 +
++// 运行时热更新调试开关（由 VortekRendererComponent.nativeSetWinFgDebug → winfgSetDebug → xwindow_swapchain.c 调用）
++// Why: 菜单「帧生成调试日志」开关需要实时生效，但 bridge 层此前只定义了 configure，
++//      调试标志没有入口，链接时报 undefined symbol: winfg_set_debug。
++extern "C" void winfg_set_debug(WinFgEngine* e, bool debug) {
++    if (!e) return;
++    e->cfg.debug = debug;
++}
++
 +extern "C" void winfg_destroy(WinFgEngine* e) {
 +    if (!e) return;
 +    e->destroyRing();
@@ -1653,10 +1662,10 @@ index 0000000..a771553
 +}
 diff --git a/app/src/main/cpp/winlator/winfg/winfg_bridge.h b/app/src/main/cpp/winlator/winfg/winfg_bridge.h
 new file mode 100644
-index 0000000..a292ab3
+index 0000000..13b6b95
 --- /dev/null
 +++ b/app/src/main/cpp/winlator/winfg/winfg_bridge.h
-@@ -0,0 +1,90 @@
+@@ -0,0 +1,93 @@
 +// ============================================================================
 +// winfg_bridge.h — C 接口层
 +//
@@ -1735,6 +1744,9 @@ index 0000000..a292ab3
 +
 +// 重置历史（清除 prev 帧，下一帧重新开始采集）。
 +void winfg_reset(WinFgEngine* e);
++
++// 运行时热更新调试开关（菜单「帧生成调试日志」）。
++void winfg_set_debug(WinFgEngine* e, bool debug);
 +
 +// 销毁引擎及所有资源。
 +void winfg_destroy(WinFgEngine* e);
