@@ -1,3 +1,26 @@
+diff --git a/app/build.gradle b/app/build.gradle
+index 40dc739..28e5b24 100644
+--- a/app/build.gradle
++++ b/app/build.gradle
+@@ -78,4 +78,5 @@ dependencies {
+     implementation 'com.github.luben:zstd-jni:1.5.7-10@aar'
+     implementation 'org.tukaani:xz:1.12'
+     implementation 'org.apache.commons:commons-compress:1.28.0'
++    implementation 'androidx.lifecycle:lifecycle-process:2.5.1'  // 上游 v33 ForegroundService 用
+ }
+diff --git a/app/src/main/AndroidManifest.xml b/app/src/main/AndroidManifest.xml
+index 694b4ec..e09a74b 100644
+--- a/app/src/main/AndroidManifest.xml
++++ b/app/src/main/AndroidManifest.xml
+@@ -106,7 +106,7 @@
+         </provider>
+ 
+         <service
+-            android:name=".ForegroundService"
++            android:name=".services.ForegroundService"
+             android:foregroundServiceType="dataSync"
+             android:exported="false" />
+     </application>
 diff --git a/app/src/main/cpp/vortekrenderer/CMakeLists.txt b/app/src/main/cpp/vortekrenderer/CMakeLists.txt
 index 0e7920d..ea4ac45 100644
 --- a/app/src/main/cpp/vortekrenderer/CMakeLists.txt
@@ -1249,489 +1272,6 @@ index 869582c..32cc1dd 100644
      task->func = func;
      task->param = param;
      task->next = NULL;
-diff --git a/app/src/main/cpp/winlator/winfg/winfg_bridge.cpp b/app/src/main/cpp/winlator/winfg/winfg_bridge.cpp
-new file mode 100644
-index 0000000..e71fb50
---- /dev/null
-+++ b/app/src/main/cpp/winlator/winfg/winfg_bridge.cpp
-@@ -0,0 +1,378 @@
-+// ============================================================================
-+// winfg_bridge.cpp — C++ 实现层
-+//
-+// 内部包装 winfg::FrameGen + 输入 ring buffer（prev/curr 两帧）。
-+// dispatch table 从 vortekrenderer 的全局 vulkanWrapper 填充。
-+//
-+// 参考：Bannerlator 的 winfg_engine.cpp（同为 native 集成范式）。
-+// ============================================================================
-+#include "winfg_bridge.h"
-+#include "framegen.hpp"
-+#include "vk_dispatch.hpp"
-+#include "config.hpp"
-+#include "log.hpp"
-+
-+// vortekrenderer 的全局 Vulkan 函数指针表（定义在 main.c）
-+extern "C" {
-+#include "vulkan_wrapper.h"
-+extern VulkanWrapper vulkanWrapper;
-+}
-+
-+#include <algorithm>
-+#include <cstring>
-+
-+namespace {
-+
-+// 2x 时 alpha=0.35（偏向 prev，减少 HUD 重影，与 win-fg layer 一致）
-+// 3x/4x 时均匀分布
-+float alphaFor(uint32_t k, uint32_t n) {
-+    if (n <= 1) return 0.35f;
-+    return (float)(k + 1) / (float)(n + 1);
-+}
-+
-+VkImageMemoryBarrier imgBar(VkImage img, VkImageLayout from, VkImageLayout to,
-+                            VkAccessFlags src, VkAccessFlags dst) {
-+    VkImageMemoryBarrier b{};
-+    b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-+    b.oldLayout = from; b.newLayout = to;
-+    b.srcAccessMask = src; b.dstAccessMask = dst;
-+    b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-+    b.image = img;
-+    b.subresourceRange = VkImageSubresourceRange{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-+    return b;
-+}
-+
-+// 从 vulkanWrapper 填充 win-fg 的 dispatch table
-+bool fillDispatch(winfg::DeviceDispatch& dd, winfg::InstanceDispatch& id) {
-+    // Instance-level
-+    id.GetInstanceProcAddr = vulkanWrapper.vkGetInstanceProcAddr;
-+    id.DestroyInstance = vulkanWrapper.vkDestroyInstance;
-+    id.GetPhysicalDeviceMemoryProperties = vulkanWrapper.vkGetPhysicalDeviceMemoryProperties;
-+    id.GetPhysicalDeviceQueueFamilyProperties = vulkanWrapper.vkGetPhysicalDeviceQueueFamilyProperties;
-+    id.GetPhysicalDeviceProperties = vulkanWrapper.vkGetPhysicalDeviceProperties;
-+    id.GetPhysicalDeviceProperties2 = vulkanWrapper.vkGetPhysicalDeviceProperties2;
-+
-+    // Device-level（win-fg chain 实际调用的子集）
-+    dd.GetDeviceProcAddr = vulkanWrapper.vkGetDeviceProcAddr;
-+    dd.DestroyDevice = vulkanWrapper.vkDestroyDevice;
-+    dd.GetDeviceQueue = vulkanWrapper.vkGetDeviceQueue;
-+    dd.QueueSubmit = vulkanWrapper.vkQueueSubmit;
-+    dd.QueueWaitIdle = vulkanWrapper.vkQueueWaitIdle;
-+    dd.DeviceWaitIdle = vulkanWrapper.vkDeviceWaitIdle;
-+    dd.CreateImage = vulkanWrapper.vkCreateImage;
-+    dd.DestroyImage = vulkanWrapper.vkDestroyImage;
-+    dd.CreateImageView = vulkanWrapper.vkCreateImageView;
-+    dd.DestroyImageView = vulkanWrapper.vkDestroyImageView;
-+    dd.AllocateMemory = vulkanWrapper.vkAllocateMemory;
-+    dd.FreeMemory = vulkanWrapper.vkFreeMemory;
-+    dd.BindImageMemory = vulkanWrapper.vkBindImageMemory;
-+    dd.GetImageMemoryRequirements = vulkanWrapper.vkGetImageMemoryRequirements;
-+    dd.CreateBuffer = vulkanWrapper.vkCreateBuffer;
-+    dd.DestroyBuffer = vulkanWrapper.vkDestroyBuffer;
-+    dd.GetBufferMemoryRequirements = vulkanWrapper.vkGetBufferMemoryRequirements;
-+    dd.BindBufferMemory = vulkanWrapper.vkBindBufferMemory;
-+    dd.MapMemory = vulkanWrapper.vkMapMemory;
-+    dd.UnmapMemory = vulkanWrapper.vkUnmapMemory;
-+    dd.CreateSampler = vulkanWrapper.vkCreateSampler;
-+    dd.DestroySampler = vulkanWrapper.vkDestroySampler;
-+    dd.CreateShaderModule = vulkanWrapper.vkCreateShaderModule;
-+    dd.DestroyShaderModule = vulkanWrapper.vkDestroyShaderModule;
-+    dd.CreateDescriptorSetLayout = vulkanWrapper.vkCreateDescriptorSetLayout;
-+    dd.DestroyDescriptorSetLayout = vulkanWrapper.vkDestroyDescriptorSetLayout;
-+    dd.CreatePipelineLayout = vulkanWrapper.vkCreatePipelineLayout;
-+    dd.DestroyPipelineLayout = vulkanWrapper.vkDestroyPipelineLayout;
-+    dd.CreateComputePipelines = vulkanWrapper.vkCreateComputePipelines;
-+    dd.DestroyPipeline = vulkanWrapper.vkDestroyPipeline;
-+    dd.CreateDescriptorPool = vulkanWrapper.vkCreateDescriptorPool;
-+    dd.DestroyDescriptorPool = vulkanWrapper.vkDestroyDescriptorPool;
-+    dd.AllocateDescriptorSets = vulkanWrapper.vkAllocateDescriptorSets;
-+    dd.UpdateDescriptorSets = vulkanWrapper.vkUpdateDescriptorSets;
-+    dd.ResetDescriptorPool = vulkanWrapper.vkResetDescriptorPool;
-+    dd.AllocateCommandBuffers = vulkanWrapper.vkAllocateCommandBuffers;
-+    dd.FreeCommandBuffers = vulkanWrapper.vkFreeCommandBuffers;
-+    dd.BeginCommandBuffer = vulkanWrapper.vkBeginCommandBuffer;
-+    dd.EndCommandBuffer = vulkanWrapper.vkEndCommandBuffer;
-+    dd.CmdBindPipeline = vulkanWrapper.vkCmdBindPipeline;
-+    dd.CmdBindDescriptorSets = vulkanWrapper.vkCmdBindDescriptorSets;
-+    dd.CmdDispatch = vulkanWrapper.vkCmdDispatch;
-+    dd.CmdPipelineBarrier = vulkanWrapper.vkCmdPipelineBarrier;
-+    dd.CmdCopyImage = vulkanWrapper.vkCmdCopyImage;
-+    dd.CmdClearColorImage = vulkanWrapper.vkCmdClearColorImage;
-+    dd.CreateFence = vulkanWrapper.vkCreateFence;
-+    dd.DestroyFence = vulkanWrapper.vkDestroyFence;
-+    dd.WaitForFences = vulkanWrapper.vkWaitForFences;
-+    dd.ResetFences = vulkanWrapper.vkResetFences;
-+
-+    // 校验关键函数非空
-+    if (!dd.CreateImage || !dd.CreateImageView || !dd.CreateComputePipelines ||
-+        !dd.AllocateMemory || !dd.CmdDispatch || !id.GetPhysicalDeviceMemoryProperties) {
-+        WFG_LOGE("bridge: critical Vulkan functions missing in vulkanWrapper");
-+        return false;
-+    }
-+    return true;
-+}
-+
-+struct Slot {
-+    VkImage image = VK_NULL_HANDLE;
-+    VkDeviceMemory mem = VK_NULL_HANDLE;
-+    VkImageView view = VK_NULL_HANDLE;
-+    bool valid = false;
-+};
-+
-+} // namespace
-+
-+// ============================================================================
-+// WinFgEngine — 内部实现（C++）
-+// ============================================================================
-+struct WinFgEngine {
-+    winfg::DeviceDispatch dd{};
-+    winfg::InstanceDispatch id{};
-+    VkPhysicalDevice phys = VK_NULL_HANDLE;
-+    VkDevice dev = VK_NULL_HANDLE;
-+    uint32_t qf = 0;
-+    VkQueue queue = VK_NULL_HANDLE;
-+    VkPhysicalDeviceMemoryProperties memProps{};
-+
-+    winfg::FrameGen fg;
-+    winfg::Config cfg;
-+    bool unavailable = false;
-+
-+    Slot ring[2];       // prev/curr 输入 ring
-+    int currIdx = 0;    // 当前 curr 在 ring 中的索引
-+    uint32_t history = 0;  // 已采集帧数（需2帧才能插值）
-+    uint32_t gmSlot = 0;   // C1 global-motion SSBO ring slot
-+    uint32_t builtW = 0, builtH = 0;
-+    VkFormat builtFmt = VK_FORMAT_UNDEFINED;
-+
-+    uint32_t memType(uint32_t bits, VkMemoryPropertyFlags props) const {
-+        for (uint32_t i = 0; i < memProps.memoryTypeCount; i++)
-+            if ((bits & (1u << i)) && (memProps.memoryTypes[i].propertyFlags & props) == props)
-+                return i;
-+        return 0;
-+    }
-+
-+    bool makeSlot(Slot& s, uint32_t w, uint32_t h, VkFormat fmt) {
-+        VkImageCreateInfo ii{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
-+        ii.imageType = VK_IMAGE_TYPE_2D; ii.extent = VkExtent3D{w, h, 1};
-+        ii.mipLevels = 1; ii.arrayLayers = 1; ii.format = fmt;
-+        ii.tiling = VK_IMAGE_TILING_OPTIMAL; ii.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-+        ii.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
-+        ii.samples = VK_SAMPLE_COUNT_1_BIT; ii.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-+        if (dd.CreateImage(dev, &ii, nullptr, &s.image) != VK_SUCCESS) return false;
-+        VkMemoryRequirements req; dd.GetImageMemoryRequirements(dev, s.image, &req);
-+        VkMemoryAllocateInfo ai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
-+        ai.allocationSize = req.size;
-+        ai.memoryTypeIndex = memType(req.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-+        if (dd.AllocateMemory(dev, &ai, nullptr, &s.mem) != VK_SUCCESS) { destroySlot(s); return false; }
-+        dd.BindImageMemory(dev, s.image, s.mem, 0);
-+        VkImageViewCreateInfo vi{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
-+        vi.image = s.image; vi.viewType = VK_IMAGE_VIEW_TYPE_2D; vi.format = fmt;
-+        vi.subresourceRange = VkImageSubresourceRange{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-+        if (dd.CreateImageView(dev, &vi, nullptr, &s.view) != VK_SUCCESS) { destroySlot(s); return false; }
-+        s.valid = false;
-+        return true;
-+    }
-+
-+    void destroySlot(Slot& s) {
-+        if (s.view) dd.DestroyImageView(dev, s.view, nullptr);
-+        if (s.image) dd.DestroyImage(dev, s.image, nullptr);
-+        if (s.mem) dd.FreeMemory(dev, s.mem, nullptr);
-+        s = Slot{};
-+    }
-+
-+    void destroyRing() {
-+        if (dev == VK_NULL_HANDLE || !dd.DeviceWaitIdle) return;
-+        if (ring[0].image || ring[1].image) dd.DeviceWaitIdle(dev);
-+        destroySlot(ring[0]); destroySlot(ring[1]);
-+        history = 0;
-+    }
-+};
-+
-+// ============================================================================
-+// C 接口实现
-+// ============================================================================
-+
-+extern "C" WinFgEngine* winfg_create(VkInstance /*instance*/,
-+                                      VkPhysicalDevice phys,
-+                                      VkDevice dev,
-+                                      uint32_t queueFamily,
-+                                      VkQueue queue) {
-+    auto* e = new WinFgEngine();
-+    e->phys = phys; e->dev = dev; e->qf = queueFamily; e->queue = queue;
-+
-+    if (!fillDispatch(e->dd, e->id)) {
-+        WFG_LOGE("bridge: dispatch fill failed");
-+        delete e;
-+        return nullptr;
-+    }
-+    e->id.GetPhysicalDeviceMemoryProperties(phys, &e->memProps);
-+
-+    if (!e->fg.init(&e->dd, &e->id, phys, dev, queueFamily, queue)) {
-+        WFG_LOGE("bridge: FrameGen::init failed");
-+        e->unavailable = true;
-+        delete e;
-+        return nullptr;
-+    }
-+    WFG_LOGI("bridge: win-fg native engine ready (10 pipelines, embedded shaders)");
-+    return e;
-+}
-+
-+extern "C" void winfg_configure(WinFgEngine* e, int multiplier, int model,
-+                                 int perfPreset, float flowScale) {
-+    if (!e || e->unavailable) return;
-+    e->cfg.enabled = true;
-+    e->cfg.multiplier = std::max(2, multiplier);
-+    e->cfg.model = (model == 3) ? 3 : 4;
-+    e->cfg.perfPreset = std::clamp(perfPreset, 0, 2);
-+    e->cfg.flowScale = std::clamp(flowScale, 0.25f, 1.0f);
-+    e->fg.configure(e->cfg);
-+}
-+
-+extern "C" bool winfg_prepare(WinFgEngine* e, uint32_t w, uint32_t h, VkFormat fmt) {
-+    if (!e || e->unavailable || w == 0 || h == 0 || fmt == VK_FORMAT_UNDEFINED) return false;
-+    if (e->builtW == w && e->builtH == h && e->builtFmt == fmt && e->fg.valid()) return true;
-+
-+    if (!e->fg.onResize(VkExtent2D{w, h}, fmt, false)) {
-+        WFG_LOGE("bridge: onResize %ux%u failed", w, h);
-+        e->unavailable = true;
-+        return false;
-+    }
-+    e->destroyRing();
-+    for (Slot& s : e->ring) {
-+        if (!e->makeSlot(s, w, h, fmt)) { e->destroyRing(); e->unavailable = true; return false; }
-+    }
-+    e->builtW = w; e->builtH = h; e->builtFmt = fmt;
-+    e->history = 0; e->currIdx = 0;
-+    WFG_LOGI("bridge: prepared %ux%u fmt=%d model=%d preset=%d",
-+             w, h, (int)fmt, e->cfg.model, e->cfg.perfPreset);
-+    return true;
-+}
-+
-+extern "C" uint32_t winfg_process(WinFgEngine* e, VkCommandBuffer cmd,
-+                                   VkImage source, uint32_t w, uint32_t h) {
-+    if (!e || e->unavailable || !e->fg.valid()) return 0;
-+
-+    // 旋转 ring：要覆盖的 slot 变为新 curr，另一个变为 prev
-+    e->currIdx = 1 - e->currIdx;
-+    Slot& dst = e->ring[e->currIdx];
-+
-+    // source GENERAL → TRANSFER_SRC；dst UNDEFINED → TRANSFER_DST
-+    VkImageMemoryBarrier pre[2] = {
-+        imgBar(source, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-+               VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_SHADER_WRITE_BIT,
-+               VK_ACCESS_TRANSFER_READ_BIT),
-+        imgBar(dst.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-+               0, VK_ACCESS_TRANSFER_WRITE_BIT),
-+    };
-+    e->dd.CmdPipelineBarrier(cmd,
-+        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-+        VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 2, pre);
-+
-+    VkImageCopy region{};
-+    region.srcSubresource = VkImageSubresourceLayers{VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-+    region.dstSubresource = VkImageSubresourceLayers{VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-+    region.extent = VkExtent3D{w, h, 1};
-+    e->dd.CmdCopyImage(cmd, source, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-+                       dst.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
-+
-+    // source → GENERAL（恢复）；dst → SHADER_READ_ONLY（chain 采样用）
-+    VkImageMemoryBarrier post[2] = {
-+        imgBar(source, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL,
-+               VK_ACCESS_TRANSFER_READ_BIT,
-+               VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_TRANSFER_READ_BIT),
-+        imgBar(dst.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-+               VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT),
-+    };
-+    e->dd.CmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
-+        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
-+        0, 0, nullptr, 0, nullptr, 2, post);
-+
-+    dst.valid = true;
-+    if (e->history < 2) e->history++;
-+
-+    // 返回应生成的帧数
-+    if (e->history < 2) return 0;
-+    uint32_t want = (uint32_t)std::max(e->cfg.multiplier - 1, 0);
-+    return std::min(want, 3u);  // 最多3帧（4x）
-+}
-+
-+extern "C" void winfg_generate(WinFgEngine* e, VkCommandBuffer cmd,
-+                                uint32_t generation, uint32_t count,
-+                                VkImage targetImage, VkImageView targetView,
-+                                uint32_t /*w*/, uint32_t /*h*/) {
-+    if (!e || e->unavailable || e->history < 2 || !e->fg.valid()) return;
-+    const Slot& prev = e->ring[1 - e->currIdx];
-+    const Slot& curr = e->ring[e->currIdx];
-+    if (!prev.valid || !curr.valid) return;
-+
-+    // target GENERAL → GENERAL（为 compute write 做准备）
-+    VkImageMemoryBarrier toWrite = imgBar(targetImage, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL,
-+        VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_SHADER_READ_BIT, VK_ACCESS_SHADER_WRITE_BIT);
-+    e->dd.CmdPipelineBarrier(cmd,
-+        VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-+        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &toWrite);
-+
-+    e->fg.record(cmd, prev.view, curr.view, targetView,
-+                 alphaFor(generation, count), e->gmSlot);
-+    if (generation + 1 == count)
-+        e->gmSlot = (e->gmSlot + 1) % (uint32_t)winfg::FrameGen::kGmSlots;
-+}
-+
-+extern "C" void winfg_set_debug(WinFgEngine* e, int debug) {
-+    if (!e || e->unavailable) return;
-+    e->cfg.debug = debug ? 1 : 0;
-+    e->fg.configure(e->cfg);
-+}
-+
-+extern "C" void winfg_restore_curr(WinFgEngine* e, VkCommandBuffer cmd,
-+                                    VkImage target, uint32_t w, uint32_t h) {
-+    if (!e || e->unavailable) return;
-+    const Slot& curr = e->ring[e->currIdx];
-+    if (!curr.valid) return;
-+
-+    // curr SHADER_READ_ONLY → TRANSFER_SRC；target GENERAL → TRANSFER_DST
-+    VkImageMemoryBarrier pre[2] = {
-+        imgBar(curr.image, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-+               VK_ACCESS_SHADER_READ_BIT, VK_ACCESS_TRANSFER_READ_BIT),
-+        imgBar(target, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-+               VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_READ_BIT, VK_ACCESS_TRANSFER_WRITE_BIT),
-+    };
-+    e->dd.CmdPipelineBarrier(cmd,
-+        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
-+        VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 2, pre);
-+
-+    VkImageCopy region{};
-+    region.srcSubresource = VkImageSubresourceLayers{VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-+    region.dstSubresource = VkImageSubresourceLayers{VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-+    region.extent = VkExtent3D{w, h, 1};
-+    e->dd.CmdCopyImage(cmd, curr.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-+                       target, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
-+
-+    // curr → SHADER_READ_ONLY；target → GENERAL
-+    VkImageMemoryBarrier post[2] = {
-+        imgBar(curr.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-+               VK_ACCESS_TRANSFER_READ_BIT, VK_ACCESS_SHADER_READ_BIT),
-+        imgBar(target, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL,
-+               VK_ACCESS_TRANSFER_WRITE_BIT,
-+               VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_TRANSFER_READ_BIT),
-+    };
-+    e->dd.CmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
-+        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
-+        0, 0, nullptr, 0, nullptr, 2, post);
-+}
-+
-+extern "C" void winfg_reset(WinFgEngine* e) {
-+    if (!e) return;
-+    e->history = 0;
-+}
-+
-+extern "C" void winfg_destroy(WinFgEngine* e) {
-+    if (!e) return;
-+    e->destroyRing();
-+    e->fg.destroy();
-+    delete e;
-+}
-+
-+extern "C" bool winfg_valid(WinFgEngine* e) {
-+    return e && !e->unavailable && e->fg.valid();
-+}
-diff --git a/app/src/main/cpp/winlator/winfg/winfg_bridge.h b/app/src/main/cpp/winlator/winfg/winfg_bridge.h
-new file mode 100644
-index 0000000..dd83750
---- /dev/null
-+++ b/app/src/main/cpp/winlator/winfg/winfg_bridge.h
-@@ -0,0 +1,93 @@
-+// ============================================================================
-+// winfg_bridge.h — C 接口层
-+//
-+// Why: vortekrenderer 是纯 C 项目，而 win-fg (framegen.cpp) 是 C++。
-+//      本文件提供纯 C 接口，内部用 C++ 包装 winfg::FrameGen + 输入 ring。
-+// What: 暴露 init/configure/prepare/process/generate/restore/reset/destroy。
-+// How: 删除本文件及 winfg_bridge.cpp、winfg/ 目录即回退到无帧生成版本。
-+//
-+// 集成位置：xwindow_swapchain.c 的 XWindowSwapchain_presentImage()。
-+// ============================================================================
-+#ifndef WINFG_BRIDGE_H
-+#define WINFG_BRIDGE_H
-+
-+#include <vulkan/vulkan.h>
-+#include <stdbool.h>
-+#include <stdint.h>
-+
-+#ifdef __cplusplus
-+extern "C" {
-+#endif
-+
-+typedef struct WinFgEngine WinFgEngine;
-+
-+// 创建并初始化帧生成引擎。
-+// instance/phys/dev/queueFamily/queue 来自 vortekrenderer 的 Vulkan 上下文。
-+// 失败返回 NULL（logcat tag "win-fg" 有详细原因）。
-+WinFgEngine* winfg_create(VkInstance instance,
-+                          VkPhysicalDevice phys,
-+                          VkDevice dev,
-+                          uint32_t queueFamily,
-+                          VkQueue queue);
-+
-+// 运行时配置（热更新，无需重启）。
-+//   multiplier: 2/3/4（生成帧数 = multiplier-1）
-+//   model:      3=optical flow, 4=bidirectional（默认4）
-+//   perfPreset: 0=质量, 1=平衡（默认）, 2=性能
-+//   flowScale:  光流幅度缩放（0.25~1.0，默认1.0）
-+void winfg_configure(WinFgEngine* e,
-+                     int multiplier,
-+                     int model,
-+                     int perfPreset,
-+                     float flowScale);
-+
-+// 准备指定分辨率/格式的资源。分辨率变化时必须调用。
-+bool winfg_prepare(WinFgEngine* e, uint32_t w, uint32_t h, VkFormat fmt);
-+
-+// 处理一帧：把 source 复制到内部 ring 作为 "curr"（上一帧自动变为 "prev"）。
-+// 返回本次应生成的中间帧数（0=还没有 prev 帧或引擎无效，1=2x，2=3x，3=4x）。
-+// 调用者需在调用前后自行管理 source 的 image layout（GENERAL 进出）。
-+uint32_t winfg_process(WinFgEngine* e,
-+                       VkCommandBuffer cmd,
-+                       VkImage source,
-+                       uint32_t w,
-+                       uint32_t h);
-+
-+// 生成第 generation 帧（共 count 帧）到 targetImage/targetView。
-+// generation: 0..count-1；count 通常 = winfg_process 的返回值。
-+// target 必须是 GENERAL layout（进出都是 GENERAL）。
-+void winfg_generate(WinFgEngine* e,
-+                    VkCommandBuffer cmd,
-+                    uint32_t generation,
-+                    uint32_t count,
-+                    VkImage targetImage,
-+                    VkImageView targetView,
-+                    uint32_t w,
-+                    uint32_t h);
-+
-+// 把内部 ring 的 "curr"（最近一次 process 的真实帧）blit 到 target。
-+// 用于生成帧显示后恢复 swapchain image 为真实帧。
-+// target 必须是 GENERAL layout（进出都是 GENERAL）。
-+void winfg_restore_curr(WinFgEngine* e,
-+                        VkCommandBuffer cmd,
-+                        VkImage target,
-+                        uint32_t w,
-+                        uint32_t h);
-+
-+// 重置历史（清除 prev 帧，下一帧重新开始采集）。
-+void winfg_reset(WinFgEngine* e);
-+
-+// 销毁引擎及所有资源。
-+void winfg_destroy(WinFgEngine* e);
-+
-+// 引擎是否有效（init 成功且未失败）。
-+bool winfg_valid(WinFgEngine* e);
-+
-+// 设置调试日志开关（1=输出逐帧调试日志，logcat tag "win-fg"）。
-+void winfg_set_debug(WinFgEngine* e, int debug);
-+
-+#ifdef __cplusplus
-+}
-+#endif
-+
-+#endif // WINFG_BRIDGE_H
 diff --git a/app/src/main/java/com/winlator/ContainerDetailFragment.java b/app/src/main/java/com/winlator/ContainerDetailFragment.java
 index c6f708f..fce6a4c 100644
 --- a/app/src/main/java/com/winlator/ContainerDetailFragment.java
@@ -1785,6 +1325,114 @@ index c6f708f..fce6a4c 100644
                  String graphicsDriver = graphicsDriverPicker.getGraphicsDriver();
                  String dxwrapper = dxwrapperPicker.getDXWrapper();
                  String dxwrapperConfig = dxwrapperPicker.getDXWrapperConfig();
+diff --git a/app/src/main/java/com/winlator/ForegroundService.java b/app/src/main/java/com/winlator/ForegroundService.java
+deleted file mode 100644
+index 1cd6cdc..0000000
+--- a/app/src/main/java/com/winlator/ForegroundService.java
++++ /dev/null
+@@ -1,102 +0,0 @@
+-package com.winlator;
+-
+-import android.app.Notification;
+-import android.app.NotificationChannel;
+-import android.app.NotificationManager;
+-import android.app.Service;
+-import android.content.Context;
+-import android.content.Intent;
+-import android.content.SharedPreferences;
+-import android.os.Build;
+-import android.os.IBinder;
+-import android.os.PowerManager;
+-
+-import androidx.core.app.NotificationCompat;
+-import androidx.preference.PreferenceManager;
+-
+-public class ForegroundService extends Service {
+-    private static final String NOTIFICATION_CHANNEL_ID = "winlator_running_channel";
+-    private static final int NOTIFICATION_ID = 1001;
+-    private PowerManager.WakeLock wakeLock;
+-
+-    @Override
+-    public void onCreate() {
+-        super.onCreate();
+-        createNotificationChannel();
+-        acquireWakeLock();
+-    }
+-
+-    @Override
+-    public int onStartCommand(Intent intent, int flags, int startId) {
+-        Notification notification = createNotification();
+-        startForeground(NOTIFICATION_ID, notification);
+-        return START_STICKY;
+-    }
+-
+-    @Override
+-    public IBinder onBind(Intent intent) {
+-        return null;
+-    }
+-
+-    @Override
+-    public void onDestroy() {
+-        releaseWakeLock();
+-        super.onDestroy();
+-    }
+-
+-    @Override
+-    public void onTaskRemoved(Intent rootIntent) {
+-        // 用户划掉最近任务：仅当开启后台保活且容器仍在运行时补拉服务，避免退出后被误拉
+-        SharedPreferences preferences = PreferenceManager.getDefaultSharedPreferences(this);
+-        if (preferences.getBoolean("keep_alive", false) && preferences.getBoolean("container_running", false)) {
+-            startService(new Intent(this, ForegroundService.class));
+-        }
+-        super.onTaskRemoved(rootIntent);
+-    }
+-
+-    private void acquireWakeLock() {
+-        SharedPreferences preferences = PreferenceManager.getDefaultSharedPreferences(this);
+-        if (!preferences.getBoolean("keep_alive", false)) return;
+-        PowerManager powerManager = (PowerManager)getSystemService(Context.POWER_SERVICE);
+-        wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "winlator:keepalive");
+-        wakeLock.acquire();
+-    }
+-
+-    private void releaseWakeLock() {
+-        if (wakeLock != null && wakeLock.isHeld()) wakeLock.release();
+-        wakeLock = null;
+-    }
+-
+-    private void createNotificationChannel() {
+-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+-            NotificationChannel channel = new NotificationChannel(
+-                NOTIFICATION_CHANNEL_ID,
+-                getString(R.string.app_name),
+-                NotificationManager.IMPORTANCE_LOW
+-            );
+-            channel.setDescription(getString(R.string.running_notification_desc));
+-            NotificationManager manager = getSystemService(NotificationManager.class);
+-            manager.createNotificationChannel(channel);
+-        }
+-    }
+-
+-    private Notification createNotification() {
+-        Intent notificationIntent = new Intent(this, XServerDisplayActivity.class);
+-        notificationIntent.setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+-        
+-        int flags = android.app.PendingIntent.FLAG_UPDATE_CURRENT;
+-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+-            flags |= android.app.PendingIntent.FLAG_IMMUTABLE;
+-        }
+-        
+-        android.app.PendingIntent pendingIntent = android.app.PendingIntent.getActivity(this, 0, notificationIntent, flags);
+-
+-        return new NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
+-            .setContentTitle(getString(R.string.app_name))
+-            .setContentText(getString(R.string.running_notification_text))
+-            .setSmallIcon(R.mipmap.ic_launcher)
+-            .setContentIntent(pendingIntent)
+-            .setOngoing(true)
+-            .build();
+-    }
+-}
 diff --git a/app/src/main/java/com/winlator/XServerDisplayActivity.java b/app/src/main/java/com/winlator/XServerDisplayActivity.java
 index a455c58..e2c27e0 100644
 --- a/app/src/main/java/com/winlator/XServerDisplayActivity.java
@@ -1975,6 +1623,24 @@ index a455c58..e2c27e0 100644
 +    }
  }
 \ No newline at end of file
+diff --git a/app/src/main/java/com/winlator/core/AppUtils.java b/app/src/main/java/com/winlator/core/AppUtils.java
+index 72b4db8..2d21212 100644
+--- a/app/src/main/java/com/winlator/core/AppUtils.java
++++ b/app/src/main/java/com/winlator/core/AppUtils.java
+@@ -47,6 +47,13 @@ import java.util.TimerTask;
+ public abstract class AppUtils {
+     public static final String DIRECTORY_DOWNLOADS = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS).getPath();
+     public static final String INTERNAL_STORAGE = "/data/data/" + BuildConfig.APPLICATION_ID + "/storage";
++
++    // 上游 v33 新增：运行时按实际包名初始化（兼容 MT 改包场景）
++    private static volatile String packageName = "com.winlator";
++    public static void init(Context context) { packageName = context.getPackageName(); }
++    /** 容器默认 E: 盘内部存储目录（上游 v33 新增，MainApplication/WineUtils 调用） */
++    public static String getInternalStorage() { return INTERNAL_STORAGE; }
++
+     private static WeakReference<Toast> globalToastReference = null;
+ 
+     public static class RestartApplicationOptions {
 diff --git a/app/src/main/java/com/winlator/core/WinFGConfig.java b/app/src/main/java/com/winlator/core/WinFGConfig.java
 index d4bcee0..3f2fca2 100644
 --- a/app/src/main/java/com/winlator/core/WinFGConfig.java
@@ -2234,10 +1900,10 @@ index a471d4a..e120575 100644
          <item android:icon="@drawable/icon_screen_effect" android:id="@+id/menu_item_screen_effect" android:title="@string/screen_effect" />
          <item android:icon="@drawable/icon_pip_mode" android:id="@+id/menu_item_pip_mode" android:title="@string/pip_mode" />
 diff --git a/app/src/main/res/values-zh/strings.xml b/app/src/main/res/values-zh/strings.xml
-index eeeb8e5..e3e2ef5 100644
+index f6eb9bf..58d2ead 100644
 --- a/app/src/main/res/values-zh/strings.xml
 +++ b/app/src/main/res/values-zh/strings.xml
-@@ -344,6 +344,11 @@
+@@ -342,6 +342,11 @@
      <string name="opengl_version">OpenGL版本</string>
      <string name="disable_vertex_array_bgra">禁用顶点阵列BGRA</string>
      <string name="screen_effect">屏幕滤镜</string>
@@ -2250,10 +1916,10 @@ index eeeb8e5..e3e2ef5 100644
      <string name="brightness">亮度</string>
      <string name="contrast">对比度</string>
 diff --git a/app/src/main/res/values/strings.xml b/app/src/main/res/values/strings.xml
-index 1104f8e..3908c5f 100644
+index 43ab990..ffdb2df 100644
 --- a/app/src/main/res/values/strings.xml
 +++ b/app/src/main/res/values/strings.xml
-@@ -346,6 +346,11 @@
+@@ -344,6 +344,11 @@
      <string name="opengl_version">OpenGL Version</string>
      <string name="disable_vertex_array_bgra">Disable vertex array BGRA</string>
      <string name="screen_effect">Screen Effect</string>
