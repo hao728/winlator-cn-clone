@@ -1275,10 +1275,10 @@ index 869582c..32cc1dd 100644
      task->next = NULL;
 diff --git a/app/src/main/cpp/winlator/winfg/winfg_bridge.cpp b/app/src/main/cpp/winlator/winfg/winfg_bridge.cpp
 new file mode 100644
-index 0000000..a771553
+index 0000000..291d8f4
 --- /dev/null
 +++ b/app/src/main/cpp/winlator/winfg/winfg_bridge.cpp
-@@ -0,0 +1,372 @@
+@@ -0,0 +1,380 @@
 +// ============================================================================
 +// winfg_bridge.cpp — C++ 实现层
 +//
@@ -1641,6 +1641,14 @@ index 0000000..a771553
 +    e->history = 0;
 +}
 +
++// 运行时热更新调试开关（由 VortekRendererComponent.nativeSetWinFgDebug → winfgSetDebug → xwindow_swapchain.c 调用）
++// Why: 菜单「帧生成调试日志」开关需要实时生效，但 bridge 层此前只定义了 configure，
++//      调试标志没有入口，链接时报 undefined symbol: winfg_set_debug。
++extern "C" void winfg_set_debug(WinFgEngine* e, bool debug) {
++    if (!e) return;
++    e->cfg.debug = debug;
++}
++
 +extern "C" void winfg_destroy(WinFgEngine* e) {
 +    if (!e) return;
 +    e->destroyRing();
@@ -1653,10 +1661,10 @@ index 0000000..a771553
 +}
 diff --git a/app/src/main/cpp/winlator/winfg/winfg_bridge.h b/app/src/main/cpp/winlator/winfg/winfg_bridge.h
 new file mode 100644
-index 0000000..a292ab3
+index 0000000..13b6b95
 --- /dev/null
 +++ b/app/src/main/cpp/winlator/winfg/winfg_bridge.h
-@@ -0,0 +1,90 @@
+@@ -0,0 +1,93 @@
 +// ============================================================================
 +// winfg_bridge.h — C 接口层
 +//
@@ -1735,6 +1743,9 @@ index 0000000..a292ab3
 +
 +// 重置历史（清除 prev 帧，下一帧重新开始采集）。
 +void winfg_reset(WinFgEngine* e);
++
++// 运行时热更新调试开关（菜单「帧生成调试日志」）。
++void winfg_set_debug(WinFgEngine* e, bool debug);
 +
 +// 销毁引擎及所有资源。
 +void winfg_destroy(WinFgEngine* e);
@@ -1909,7 +1920,7 @@ index 1cd6cdc..0000000
 -    }
 -}
 diff --git a/app/src/main/java/com/winlator/XServerDisplayActivity.java b/app/src/main/java/com/winlator/XServerDisplayActivity.java
-index a455c58..e2c27e0 100644
+index a455c58..a8ac204 100644
 --- a/app/src/main/java/com/winlator/XServerDisplayActivity.java
 +++ b/app/src/main/java/com/winlator/XServerDisplayActivity.java
 @@ -18,9 +18,11 @@ import android.widget.ArrayAdapter;
@@ -1924,7 +1935,15 @@ index a455c58..e2c27e0 100644
  import androidx.appcompat.app.AppCompatActivity;
  import androidx.core.view.GravityCompat;
  import androidx.drawerlayout.widget.DrawerLayout;
-@@ -55,9 +57,11 @@ import com.winlator.core.LocaleHelper;
+@@ -34,6 +36,7 @@ import com.winlator.container.ContainerManager;
+ import com.winlator.container.DXWrappers;
+ import com.winlator.container.GraphicsDrivers;
+ import com.winlator.container.Shortcut;
++import com.winlator.services.ForegroundService;
+ import com.winlator.contentdialog.ActiveWindowsDialog;
+ import com.winlator.contentdialog.AudioDriverConfigDialog;
+ import com.winlator.contentdialog.ContentDialog;
+@@ -55,9 +58,11 @@ import com.winlator.core.LocaleHelper;
  import com.winlator.core.PreloaderDialog;
  import com.winlator.core.ProcessHelper;
  import com.winlator.core.StringUtils;
@@ -1936,7 +1955,7 @@ index a455c58..e2c27e0 100644
  import com.winlator.core.WineInstaller;
  import com.winlator.core.WineRegistryEditor;
  import com.winlator.core.WineStartMenuCreator;
-@@ -85,7 +89,6 @@ import com.winlator.xenvironment.components.NetworkInfoUpdateComponent;
+@@ -85,7 +90,6 @@ import com.winlator.xenvironment.components.NetworkInfoUpdateComponent;
  import com.winlator.xenvironment.components.PulseAudioComponent;
  import com.winlator.xenvironment.components.SysVSharedMemoryComponent;
  import com.winlator.xenvironment.components.VirGLRendererComponent;
@@ -1944,7 +1963,7 @@ index a455c58..e2c27e0 100644
  import com.winlator.xenvironment.components.XServerComponent;
  import com.winlator.xserver.Atom;
  import com.winlator.xserver.Property;
-@@ -169,6 +172,28 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
+@@ -169,6 +173,28 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
          menu.findItem(R.id.menu_item_logs).setVisible(enableLogs);
          navigationView.setNavigationItemSelectedListener(this);
  
@@ -1973,7 +1992,7 @@ index a455c58..e2c27e0 100644
          rootFS = RootFS.find(this);
  
          if (!isGenerateWineprefix()) {
-@@ -430,6 +455,22 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
+@@ -430,6 +456,22 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
                  enterPictureInPictureMode(pipParams);
                  drawerLayout.closeDrawers();
                  break;
@@ -1996,7 +2015,7 @@ index a455c58..e2c27e0 100644
              case R.id.menu_item_logs:
                  debugDialog.show();
                  drawerLayout.closeDrawers();
-@@ -1216,4 +1257,100 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
+@@ -1216,4 +1258,100 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
          }
          else return false;
      }
