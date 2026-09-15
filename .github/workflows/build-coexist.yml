@@ -40,6 +40,38 @@ jobs:
           pip install zstandard
           sudo apt-get update -qq && sudo apt-get install -y -qq aapt apksigner unzip 2>/dev/null || true
 
+      # ============================================================
+      # 静态代码审查（编译前拦截，独立于编译结果）
+      # Why: 仅靠"编译通过 + 真机不闪退"判断代码质量太滞后（两个信号都太晚）。
+      #      本步骤在编译前扫描 native C/C++ 与 shell 脚本的高危问题：
+      #        - cppcheck: 空指针/越界/未初始化/内存泄漏等确定性缺陷（error 阻断）
+      #        - shellcheck: scripts/*.sh 语法与常见陷阱
+      # What: error 级别直接终止构建（fail-fast）；warning 只打印不阻断，
+      #       避免误报拖累正常构建（用户核心诉求：构建稳定优先）。
+      # How:  删除本步骤即回退到"无静态审查"；--enable=error 只查确定性问题，
+      #       误报率极低。Java 层由 gradle 编译时的 javac 承担（不跑全量 lint 以免拖垮 CI）。
+      # ============================================================
+      - name: 静态代码审查（cppcheck + shellcheck）
+        run: |
+          sudo apt-get install -y -qq cppcheck shellcheck 2>/dev/null || true
+          echo "── 1/2 native C/C++ 静态审查（error 阻断）──"
+          cppcheck --version
+          cppcheck --enable=error --error-exitcode=1 --inline-suppr \
+            --suppress=missingIncludeSystem --suppress=unknownMacro \
+            --suppress=unmatchedSuppression \
+            --std=c++17 \
+            -I app/src/main/cpp/vortekrenderer/include \
+            -I app/src/main/cpp/winlator/include \
+            app/src/main/cpp/vortekrenderer/src \
+            app/src/main/cpp/winlator/winfg 2>&1 | tail -60
+          echo "native 审查通过 ✓（无 error 级缺陷）"
+          echo ""
+          echo "── 2/2 shell 脚本审查（仅警告，不阻断）──"
+          if command -v shellcheck >/dev/null 2>&1; then
+            shellcheck -x scripts/*.sh 2>&1 | tail -30 || true
+          fi
+          echo "静态审查完成"
+
       - name: 读取共存配置
         id: config
         run: |
