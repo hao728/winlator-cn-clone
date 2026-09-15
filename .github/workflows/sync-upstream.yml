@@ -398,7 +398,7 @@ jobs:
 
       - name: Setup Android SDK
         if: steps.need.outputs.need_build == 'true'
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
 
       - name: 安装 NDK 和 CMake
         if: steps.need.outputs.need_build == 'true'

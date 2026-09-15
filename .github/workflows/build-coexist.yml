@@ -118,7 +118,7 @@ jobs:
           cache: 'gradle'
 
       - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
 
       - name: 安装 NDK 和 CMake
         run: sdkmanager --install "ndk;${{ env.NDK_VERSION }}" "cmake;3.22.1"
