@@ -139,26 +139,28 @@ jobs:
             echo "许可证接受重试 $i..."
             sleep 2
           done
-          echo "sdkmanager.path=$SDKMANAGER" >> $GITHUB_ENV
+          echo "SDKMANAGER_PATH=$SDKMANAGER" >> $GITHUB_ENV
           echo "✅ Android SDK 就绪"
 
       - name: 安装 NDK 和 CMake
         run: |
-          SDKMANAGER="${{ env.sdkmanager.path }}"
+          SDKMANAGER="${{ env.SDKMANAGER_PATH }}"
+          echo "使用 sdkmanager: $SDKMANAGER"
+          test -x "$SDKMANAGER" || { echo "::error::sdkmanager 路径无效: $SDKMANAGER"; exit 1; }
           NDK_DIR="$ANDROID_HOME/ndk/${{ env.NDK_VERSION }}"
-          # NDK：已预装则跳过，否则安装（自动接受许可证）
+          # NDK：已预装则跳过，否则安装（自动接受许可证，2>/dev/null 抑制 Broken pipe）
           if [ -d "$NDK_DIR" ]; then
             echo "✅ NDK ${{ env.NDK_VERSION }} 已预装，跳过"
           else
             echo "安装 NDK ${{ env.NDK_VERSION }}..."
-            yes | "$SDKMANAGER" --install "ndk;${{ env.NDK_VERSION }}" 2>&1 | tail -8
+            yes 2>/dev/null | "$SDKMANAGER" --install "ndk;${{ env.NDK_VERSION }}" 2>&1 | tail -10
           fi
           # CMake：已预装则跳过
           if [ -d "$ANDROID_HOME/cmake/3.22.1" ]; then
             echo "✅ CMake 3.22.1 已预装，跳过"
           else
             echo "安装 CMake 3.22.1..."
-            yes | "$SDKMANAGER" --install "cmake;3.22.1" 2>&1 | tail -8
+            yes 2>/dev/null | "$SDKMANAGER" --install "cmake;3.22.1" 2>&1 | tail -10
           fi
           # 最终验证
           test -d "$NDK_DIR" || { echo "::error::NDK 未安装成功，当前 ndk 目录:"; ls "$ANDROID_HOME/ndk/" 2>/dev/null || echo "(空)"; exit 1; }
