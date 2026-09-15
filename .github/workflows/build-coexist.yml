@@ -222,6 +222,30 @@ jobs:
             echo "key_pass=android" >> $GITHUB_OUTPUT
           fi
 
+      - name: Android Lint（Java/XML 静态检查，观察模式不阻断）
+        run: |
+          chmod +x gradlew
+          echo "── 运行 Android Lint（Java/XML 静态检查）──"
+          echo "Why:  补充 cppcheck 不覆盖的 Java/XML 层问题（空指针、资源引用、API 兼容等）"
+          echo "What: 扫描 app/src/main/java + app/src/main/res，输出报告"
+          echo "How:  当前为观察模式（abortOnError=false），不阻断构建；清理完后改为阻断"
+          set +e
+          ./gradlew lintRelease --no-daemon --continue > lint.log 2>&1
+          LINT_EXIT=$?
+          echo "Lint 退出码: $LINT_EXIT（观察模式下非 0 不阻断）"
+          echo "── Lint 结果摘要 ──"
+          if [ -f app/build/reports/lint-results-release.xml ]; then
+            FATAL=$(grep -c 'severity="Fatal"' app/build/reports/lint-results-release.xml 2>/dev/null || echo 0)
+            ERROR=$(grep -c 'severity="Error"' app/build/reports/lint-results-release.xml 2>/dev/null || echo 0)
+            WARNING=$(grep -c 'severity="Warning"' app/build/reports/lint-results-release.xml 2>/dev/null || echo 0)
+            echo "  Fatal: $FATAL, Error: $ERROR, Warning: $WARNING"
+            grep 'severity="Error"\|severity="Fatal"' app/build/reports/lint-results-release.xml 2>/dev/null | head -10 | sed 's/.*id="\([^"]*\)".*message="\([^"]*\)".*/  [\1] \2/' | cut -c1-120
+          else
+            echo "  未生成报告，见 lint.log"
+            tail -20 lint.log
+          fi
+          echo "Lint 完成（观察模式，不阻断）"
+
       - name: 构建 Release APK
         run: |
           chmod +x gradlew
