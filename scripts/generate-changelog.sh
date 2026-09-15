@@ -8,8 +8,11 @@ set -euo pipefail
 OUTPUT_FILE="${1:-RELEASE_NOTES.md}"
 APP_ID="${2:-org.winlator}"
 
-# 找到最近的 coexist- 前缀 tag
-LAST_TAG=$(git tag --list 'coexist-*' --sort=-creatordate 2>/dev/null | head -1 || echo "")
+# 找到最近的上一次发布 tag（兼容 v* 与 coexist-* 两种命名）
+# Why: 旧版只匹配 coexist-*，但实际打的是 v11.2-coexist-...（v 开头），
+#      导致 LAST_TAG 永远为空、更新日志每次都显示"首次发布"
+# How: 按创建时间倒序取第一个 v* 或 coexist-* tag；删掉本行即回退旧行为
+LAST_TAG=$(git tag --list 'v*' 'coexist-*' --sort=-creatordate 2>/dev/null | head -1 || echo "")
 
 echo "生成更新日志..."
 echo "上次发布 tag: ${LAST_TAG:-无（首次发布）}"
