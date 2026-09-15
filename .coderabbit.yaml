@@ -57,12 +57,6 @@ reviews:
       - "docs"
       - "translate"
 
-# 在 PR 中总结安全与风险
-summary:
-  auto_approve:
-    enabled: false   # 不自动批准，始终留人工确认（用户只信真机测试）
-  threshold: high    # 仅高风险时重点提示
-
 chat:
   auto_reply: true
   # 审查语言说明（回复 PR 提问用中文）
