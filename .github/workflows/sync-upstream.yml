@@ -424,7 +424,23 @@ jobs:
       - name: 安装 NDK 和 CMake
         if: steps.need.outputs.need_build == 'true'
         run: |
-          "${{ env.sdkmanager.path }}" --install "ndk;${{ env.NDK_VERSION }}" "cmake;3.22.1"
+          SDKMANAGER="${{ env.sdkmanager.path }}"
+          NDK_DIR="$ANDROID_HOME/ndk/${{ env.NDK_VERSION }}"
+          if [ -d "$NDK_DIR" ]; then
+            echo "✅ NDK ${{ env.NDK_VERSION }} 已预装，跳过"
+          else
+            echo "安装 NDK ${{ env.NDK_VERSION }}..."
+            yes | "$SDKMANAGER" --install "ndk;${{ env.NDK_VERSION }}" 2>&1 | tail -8
+          fi
+          if [ -d "$ANDROID_HOME/cmake/3.22.1" ]; then
+            echo "✅ CMake 3.22.1 已预装，跳过"
+          else
+            echo "安装 CMake 3.22.1..."
+            yes | "$SDKMANAGER" --install "cmake;3.22.1" 2>&1 | tail -8
+          fi
+          test -d "$NDK_DIR" || { echo "::error::NDK 未安装成功"; ls "$ANDROID_HOME/ndk/" 2>/dev/null || echo "(空)"; exit 1; }
+          test -d "$ANDROID_HOME/cmake/3.22.1" || { echo "::error::CMake 未安装成功"; ls "$ANDROID_HOME/cmake/" 2>/dev/null || echo "(空)"; exit 1; }
+          echo "✅ NDK 和 CMake 就绪"
 
       - name: 准备签名 keystore
         if: steps.need.outputs.need_build == 'true'
