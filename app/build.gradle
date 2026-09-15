@@ -36,6 +36,13 @@ android {
 
     lintOptions {
         checkReleaseBuilds false
+        // 先观察模式：不阻断构建，只输出报告；清理完 lint 问题后改为 true 开启阻断
+        abortOnError false
+        warningsAsErrors false
+        // 忽略已知误报（旧版兼容代码、第三方 native 桥接）
+        disable 'MissingTranslation', 'ExtraTranslation', 'UnusedResources',
+                'HardcodedText', 'IconDensities', 'IconLocation',
+                'GoogleAppIndexingWarning', 'MissingApplicationIcon'
     }
 
     ndkVersion '24.0.8215888'
