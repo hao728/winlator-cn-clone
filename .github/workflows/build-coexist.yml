@@ -117,11 +117,34 @@ jobs:
           distribution: 'temurin'
           cache: 'gradle'
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v4
+      - name: Setup Android SDK（用 runner 预装，不下载）
+        run: |
+          # Why: android-actions/setup-android@v3/v4 在新 runner 上会误判
+          #      sdkmanager 版本并尝试下载 commandline tools，常卡住失败。
+          #      GitHub ubuntu runner 已预装 Android SDK，直接用即可。
+          # What: 定位预装 sdkmanager，接受许可证，不下载任何东西。
+          # How:  删掉本步骤恢复用 android-actions/setup-android。
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          SDKMANAGER=$(find "$ANDROID_HOME" -maxdepth 5 -name sdkmanager -type f 2>/dev/null | head -1)
+          if [ -z "$SDKMANAGER" ]; then
+            echo "::error::未找到 sdkmanager"
+            ls -la "$ANDROID_HOME" 2>/dev/null || true
+            find "$ANDROID_HOME" -maxdepth 3 -type d 2>/dev/null | head -20
+            exit 1
+          fi
+          echo "使用 sdkmanager: $SDKMANAGER"
+          # 接受许可证（重试 3 次）
+          for i in 1 2 3; do
+            yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 && break
+            echo "许可证接受重试 $i..."
+            sleep 2
+          done
+          echo "sdkmanager.path=$SDKMANAGER" >> $GITHUB_ENV
+          echo "✅ Android SDK 就绪"
 
       - name: 安装 NDK 和 CMake
-        run: sdkmanager --install "ndk;${{ env.NDK_VERSION }}" "cmake;3.22.1"
+        run: |
+          "${{ env.sdkmanager.path }}" --install "ndk;${{ env.NDK_VERSION }}" "cmake;3.22.1"
 
       - name: 准备签名 keystore
         id: keystore
