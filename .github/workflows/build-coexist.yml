@@ -307,7 +307,9 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: "*.apk"
-          name: "Winlator 共存版 ${{ env.VERSION_NAME }} (${{ env.APP_ID }}) + win-fg ${{ env.WINFG_VERSION }}"
+          # 简洁标准命名（跟随上游 winlator-cn：WinlatorCN 11.0F beta1）
+          # 包名 / win-fg 版本等细节已写入 RELEASE_NOTES.md，不堆在标题
+          name: "WinlatorCN ${{ env.VERSION_NAME }}"
           tag_name: ${{ github.ref_name }}
           draft: false
           # 自检全过无警告 → 正式版（自动 Latest）；有跳过项 → pre-release（需人工验证）
