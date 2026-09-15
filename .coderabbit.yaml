@@ -1,0 +1,68 @@
+# ============================================================
+# CodeRabbit AI 代码审查配置（中文注释）
+# Why: 在编译之前增加独立 AI 审查环节——豆包写代码 → PR → CodeRabbit 审查
+#      → 人工确认 → 合并 main → CI 打包 → 真机测试。
+#      它能独立发现豆包思维盲区内的隐患（JNI 类型不匹配、Vulkan 时序、
+#      资源释放、上游合并冲突），并支持在 PR 里直接提问。
+# What: 配置审查语言、范围与自定义指令。本仓库是 Winlator 共存 fork
+#      （Android 容器 + win-fg 帧生成 + CI 自动构建），C/C++/Java 混编。
+# How:  删除本文件即回退到 CodeRabbit 默认行为。
+# 安装：在 https://coderabbit.ai 注册 → 安装到本仓库 → 以后所有代码
+#      走"分支 + PR"流程，PR 创建后 CodeRabbit 自动审查。
+# ============================================================
+
+language: zh-CN
+
+early_access: false
+
+reviews:
+  # 审查请求时按此标准输出评论
+  profile: assertive
+  # 审查范围：所有代码变更
+  request: "auto"
+  # 不审查的内容
+  ignore_files:
+    - "*.md"
+    - "winfg-native.patch"          # 大补丁由源码文件本身审查
+    - "gradlew"
+    - "gradlew.bat"
+  # 审查路径：全部
+  path_instructions:
+    - path: "app/src/main/cpp/**"
+      instructions: |
+        这是 Android 容器项目 winlator 的 native 层（C/C++）。
+        重点检查：
+        1. JNI 签名是否与 Java 侧 native 声明完全一致（类名/方法名/参数类型）
+        2. Vulkan 对象生命周期：image/memory/commandBuffer 是否配对创建与销毁
+        3. 多线程/多 swapchain 共享全局状态（g_winfg*）的竞态风险
+        4. 帧生成路径（xwindow_swapchain.c presentImage）的布局转换是否完整
+        5. 潜在内存泄漏与越界（cppcheck 查不到的逻辑级问题）
+        6. 注释必须中文；变量名/函数名保持英文
+    - path: "app/src/main/java/**"
+      instructions: |
+        Java 层。重点检查：
+        1. SharedPreferences 读写一致性（winfg_* 键）
+        2. JNI 调用与 native 方法签名匹配
+        3. Android 生命周期：XServerDisplayActivity 的 onResume/onPause 与
+           win-fg 菜单状态的保存/恢复
+        4. 线程安全：Toast/Dialog 必须在 UI 线程
+        5. 注释必须中文；变量名/函数名保持英文
+  # 自动生成的评论标签
+  auto_review:
+    enabled: true
+    ignore_title_keywords:
+      - "wip"
+      - "draft"
+      - "clean"
+      - "docs"
+      - "translate"
+
+# 在 PR 中总结安全与风险
+summary:
+  auto_approve:
+    enabled: false   # 不自动批准，始终留人工确认（用户只信真机测试）
+  threshold: high    # 仅高风险时重点提示
+
+chat:
+  auto_reply: true
+  # 审查语言说明（回复 PR 提问用中文）
