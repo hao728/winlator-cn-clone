@@ -253,17 +253,26 @@ public class MainApplication extends Application {
         }
         writer.write("包名: " + app.getPackageName() + "\n");
         writer.write("数据目录: " + app.getDataDir().getAbsolutePath() + "\n");
-        // 关键目录检查
-        writer.write("\n--- 关键目录检查 ---\n");
+        // 关键组件检查（wine/box64/box86 都在 rootfs 内部，不在 filesDir 下）
+        writer.write("\n--- 关键组件检查 ---\n");
         File filesDir = app.getFilesDir();
-        checkDir(writer, filesDir, "rootfs", "rootfs (Windows 根文件系统)");
-        checkDir(writer, filesDir, "wine", "wine (Wine 安装目录)");
-        checkDir(writer, filesDir, "box64", "box64 (x86_64 转译器)");
-        checkDir(writer, filesDir, "box86", "box86 (x86 转译器)");
-        // Wine 已安装版本
-        File wineDir = new File(filesDir, "wine");
-        if (wineDir.isDirectory()) {
-            File[] versions = wineDir.listFiles();
+        File rootfsDir = new File(filesDir, "rootfs");
+        boolean rootfsOk = rootfsDir.isDirectory();
+        checkFile(writer, rootfsDir, "rootfs 目录", true);
+        // wine 安装标记：rootfs/opt/installed-wine 目录存在即已安装
+        File installedWineDir = new File(rootfsDir, "opt/installed-wine");
+        boolean wineOk = installedWineDir.isDirectory();
+        checkFile(writer, installedWineDir, "Wine 运行环境 (opt/installed-wine)", true);
+        // box64/box86 二进制：rootfs/usr/bin/
+        File box64File = new File(rootfsDir, "usr/bin/box64");
+        boolean box64Ok = box64File.isFile();
+        checkFile(writer, box64File, "box64 (x86_64 转译器)", false);
+        File box86File = new File(rootfsDir, "usr/bin/box86");
+        boolean box86Ok = box86File.isFile();
+        checkFile(writer, box86File, "box86 (x86 转译器)", false);
+        // 已安装 Wine 版本（rootfs/opt/installed-wine 下的子目录）
+        if (wineOk) {
+            File[] versions = installedWineDir.listFiles();
             if (versions != null && versions.length > 0) {
                 writer.write("\n--- 已安装 Wine 版本 ---\n");
                 for (File v : versions) {
@@ -273,27 +282,29 @@ public class MainApplication extends Application {
         }
         // 缺失组件汇总
         writer.write("\n--- 缺失组件汇总 ---\n");
-        boolean allOk = true;
-        for (String dir : new String[]{"rootfs", "wine"}) {
-            if (!new File(filesDir, dir).isDirectory()) {
-                writer.write("[缺失] " + dir + " — 首次启动需下载初始化\n");
-                allOk = false;
-            }
+        if (rootfsOk && wineOk && box64Ok) {
+            writer.write("[OK] 核心组件齐全\n");
+        } else {
+            if (!rootfsOk) writer.write("[缺失] rootfs — 首次启动需初始化\n");
+            if (!wineOk) writer.write("[缺失] Wine — 容器设置里安装 Wine 版本\n");
+            if (!box64Ok) writer.write("[缺失] box64 — rootfs 不完整，建议重新初始化\n");
+            if (!box86Ok) writer.write("[提示] box86 未找到（仅运行 64 位程序可忽略）\n");
         }
-        if (allOk) writer.write("[OK] 核心组件齐全\n");
         writer.write("========================================\n\n");
     }
 
-    /** 检查单个目录是否存在并写入状态 */
-    private static void checkDir(OutputStreamWriter writer, File parent, String name, String desc) throws IOException {
-        File dir = new File(parent, name);
-        if (dir.isDirectory()) {
-            long size = dirSize(dir);
-            writer.write("[存在] " + desc + " (" + name + ")");
-            if (size > 0) writer.write(" - " + formatSize(size));
+    /** 检查文件或目录是否存在并写入状态；isDirectory=true 按目录检查并显示大小 */
+    private static void checkFile(OutputStreamWriter writer, File target, String desc, boolean isDirectory) throws IOException {
+        boolean exists = isDirectory ? target.isDirectory() : target.isFile();
+        if (exists) {
+            writer.write("[存在] " + desc);
+            if (isDirectory) {
+                long size = dirSize(target);
+                if (size > 0) writer.write(" - " + formatSize(size));
+            }
             writer.write("\n");
         } else {
-            writer.write("[缺失] " + desc + " (" + name + ")\n");
+            writer.write("[缺失] " + desc + "\n");
         }
     }
 
