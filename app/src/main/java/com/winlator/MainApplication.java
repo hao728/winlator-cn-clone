@@ -236,6 +236,10 @@ public class MainApplication extends Application {
      * Why: 用户需要一眼看出 windows 环境有无缺失（rootfs/wine/box64/容器等）
      * What: 设备信息 + 关键目录存在性检查 + Wine 版本列表 + 缺失汇总
      * How: 仅在冷启动重置文件时写入一次，追加模式不重复写
+     *
+     * @param app 用于读取设备、应用和文件目录信息的应用实例
+     * @param writer 接收诊断报告的日志写入器
+     * @throws IOException 写入诊断报告失败时抛出
      */
     private static void writeEnvironmentReport(Application app, OutputStreamWriter writer) throws IOException {
         SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault());
@@ -293,7 +297,15 @@ public class MainApplication extends Application {
         writer.write("========================================\n\n");
     }
 
-    /** 检查文件或目录是否存在并写入状态；isDirectory=true 按目录检查并显示大小 */
+    /**
+     * 检查文件或目录是否存在并写入状态，目录存在时同时显示大小。
+     *
+     * @param writer 接收检查结果的日志写入器
+     * @param target 要检查的文件或目录
+     * @param desc 写入日志的组件描述
+     * @param isDirectory {@code true} 时按目录检查，否则按文件检查
+     * @throws IOException 写入检查结果失败时抛出
+     */
     private static void checkFile(OutputStreamWriter writer, File target, String desc, boolean isDirectory) throws IOException {
         boolean exists = isDirectory ? target.isDirectory() : target.isFile();
         if (exists) {

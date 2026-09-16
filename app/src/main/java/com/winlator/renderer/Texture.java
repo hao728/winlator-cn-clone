@@ -115,6 +115,9 @@ public class Texture {
         this.needsUpdate = needsUpdate;
     }
 
+    /**
+     * 从当前 Drawable 上传像素数据，并使用局部引用防止 owner 并发变更导致空指针。
+     */
     public void updateFromDrawable() {
         // 局部快照：owner 可能在渲染期间被其他线程 setOwner(null)（窗口销毁/重建竞态），
         // 直接读字段会在 owner.width 处抛 NPE 导致 GLThread 崩溃
