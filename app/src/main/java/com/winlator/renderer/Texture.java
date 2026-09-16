@@ -116,15 +116,18 @@ public class Texture {
     }
 
     public void updateFromDrawable() {
-        if (owner == null || owner.getData() == null) return;
+        // 局部快照：owner 可能在渲染期间被其他线程 setOwner(null)（窗口销毁/重建竞态），
+        // 直接读字段会在 owner.width 处抛 NPE 导致 GLThread 崩溃
+        final Drawable drawable = owner;
+        if (drawable == null || drawable.getData() == null) return;
 
-        ByteBuffer data = owner.getData();
+        ByteBuffer data = drawable.getData();
         if (!isAllocated()) {
-            allocateTexture(owner.width, owner.height, data);
+            allocateTexture(drawable.width, drawable.height, data);
         }
         else if (needsUpdate) {
             GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, textureId);
-            GLES20.glTexSubImage2D(GLES20.GL_TEXTURE_2D, 0, 0, 0, owner.width, owner.height, format, GLES20.GL_UNSIGNED_BYTE, data);
+            GLES20.glTexSubImage2D(GLES20.GL_TEXTURE_2D, 0, 0, 0, drawable.width, drawable.height, format, GLES20.GL_UNSIGNED_BYTE, data);
             GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, 0);
             needsUpdate = false;
         }
