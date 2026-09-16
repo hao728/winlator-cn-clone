@@ -29,7 +29,10 @@ public class Container {
     public static final String DEFAULT_DXWRAPPER = DXWrappers.DXVK;
     public static final String DEFAULT_WINCOMPONENTS = "direct3d=1,directsound=1,directmusic=1,directshow=0,directplay=0,xaudio=1,vcrun2005=0,vcrun2010=1,wmdecoder=1";
     public static final String FALLBACK_WINCOMPONENTS = "direct3d=0,directsound=0,directmusic=0,directshow=0,directplay=0,xaudio=0,vcrun2005=0,vcrun2010=0,wmdecoder=0";
-    public static final String DEFAULT_DRIVES = "D:"+AppUtils.DIRECTORY_DOWNLOADS +"E:"+AppUtils.INTERNAL_STORAGE;
+    // 含 AppUtils.getInternalStorage()(按实际包名生成)，故由常量改为方法，避免类加载时冻结取值
+    public static String getDefaultDrives() {
+        return "D:"+AppUtils.DIRECTORY_DOWNLOADS +"E:"+AppUtils.getInternalStorage();
+    }
     public static final byte STARTUP_SELECTION_NORMAL = 0;
     public static final byte STARTUP_SELECTION_ESSENTIAL = 1;
     public static final byte STARTUP_SELECTION_AGGRESSIVE = 2;
@@ -47,7 +50,7 @@ public class Container {
     private String audioDriverConfig = "";
     private String wincomponents = DEFAULT_WINCOMPONENTS;
     private String audioDriver = DEFAULT_AUDIO_DRIVER;
-    private String drives = DEFAULT_DRIVES;
+    private String drives = getDefaultDrives();
     private String wineVersion = WineInfo.MAIN_WINE_INFO.identifier();
     private byte hudMode = (byte)FrameRating.Mode.DISABLED.ordinal();
     private byte startupSelection = STARTUP_SELECTION_ESSENTIAL;
