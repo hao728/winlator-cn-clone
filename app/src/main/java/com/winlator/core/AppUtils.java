@@ -1,7 +1,5 @@
 package com.winlator.core;
 
-import com.winlator.BuildConfig;
-
 import android.app.Activity;
 import android.content.Context;
 import android.content.Intent;
@@ -36,6 +34,7 @@ import androidx.appcompat.app.AppCompatActivity;
 import androidx.preference.PreferenceManager;
 
 import com.google.android.material.tabs.TabLayout;
+import com.winlator.MainApplication;
 import com.winlator.R;
 import com.winlator.SettingsFragment;
 
@@ -46,7 +45,27 @@ import java.util.TimerTask;
 
 public abstract class AppUtils {
     public static final String DIRECTORY_DOWNLOADS = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS).getPath();
-    public static final String INTERNAL_STORAGE = "/data/data/" + BuildConfig.APPLICATION_ID + "/storage";
+
+    // MT 改包共存后 getPackageName() 会变成新包名，/data/data/com.winlator 这类硬编码路径会指向
+    // 不存在的原包名目录。MainApplication.onCreate 里 init() 一次，之后按实际包名生成。
+    // 初值保持原版包名：ContentProvider 先于 Application.onCreate 创建，若那时有代码取用，
+    // 得到的仍是与改动前一致的旧值。
+    private static final String DEFAULT_PACKAGE_NAME = "com.winlator";
+    // volatile 与 PatchUtils 的 init 字段一致：init() 在主线程写入，而
+    // ContainerManager.createContainerAsync 会在后台线程构造 Container 读取该值
+    private static volatile String packageName = DEFAULT_PACKAGE_NAME;
+
+    public static void init(Context context) {
+        packageName = context.getPackageName();
+    }
+
+    /** 容器默认 E: 盘指向的内部存储目录，形如 /data/data/&lt;包名&gt;/storage */
+    public static String getInternalStorage() {
+        // 沿用 /data/data 短写法，与原硬编码值逐字一致：WineUtils 用 startsWith 拿它去匹配
+        // 容器配置里已写入的盘符路径，换成 /data/user/0 就会失配。
+        return "/data/data/" + packageName + "/storage";
+    }
+
     private static WeakReference<Toast> globalToastReference = null;
 
     public static class RestartApplicationOptions {
@@ -79,6 +98,12 @@ public abstract class AppUtils {
             if (options.containerId > 0) mainIntent.putExtra("container_id", options.containerId);
             if (options.startPath != null) mainIntent.putExtra("start_path", options.startPath);
         }
+
+        // 这里的所有调用都是 app 自身触发的进程重启（容器退出返回主菜单、改设置、装 Wine），
+        // 不是用户从桌面冷启动。置标记让新进程的 MainApplication 保留已有 logcat 文件继续追加，
+        // 避免丢掉容器退出前那段最关键的日志。必须 commit() 同步落盘，紧接着就 exit(0)。
+        PreferenceManager.getDefaultSharedPreferences(context).edit()
+            .putBoolean(MainApplication.LOGCAT_KEEP_ON_RESTART_PREF, true).commit();
 
         context.startActivity(mainIntent);
         Runtime.getRuntime().exit(0);
