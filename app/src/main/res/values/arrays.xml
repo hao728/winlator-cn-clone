@@ -171,17 +171,6 @@
         <item>CP2 Direct touch（RA2)</item>
         <item>V3(Dark)</item>
     </string-array>
-    <string-array name="winfg_perf_preset_entries">
-        <item>Quality (lowest latency)</item>
-        <item>Balanced (default)</item>
-        <item>Performance (highest FPS)</item>
-    </string-array>
-    <string-array name="winfg_multiplier_entries">
-        <item>2x</item>
-        <item>3x</item>
-        <item>4x</item>
-    </string-array>
-    <!-- Vulkan Present Mode 选项（上游 v33 新增，sync-upstream 时 arrays.xml 被 OURS 保护导致遗漏） -->
     <string-array name="present_mode_entries">
         <item>immediate</item>
         <item>mailbox</item>
