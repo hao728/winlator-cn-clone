@@ -72,6 +72,24 @@ jobs:
       #   - shellcheck: scripts/*.sh 语法与常见陷阱（仅警告不阻断）
       # 删除本步骤即回退到“无静态审查”。
       # ============================================================
+      # ============================================================
+      # 应用功能补丁（patches/ 目录下的 .patch 文件自动 git apply）
+      # Why: 手机端逐个上传13个文件太麻烦，统一用 patch 一键应用
+      # What: patches/frame-generation.patch 包含 alexvorxx 帧生成引擎全部改动
+      # How:  删除本步骤即停止应用补丁（回滚到无帧生成状态）
+      # ============================================================
+      - name: 应用功能补丁
+        run: |
+          if [ -d patches ]; then
+            for patch in patches/*.patch; do
+              [ -f "$patch" ] || continue
+              echo "应用补丁: $patch"
+              git apply --verbose "$patch" && echo "  ✓ 成功" || echo "  ✗ 失败（可能已应用或冲突）"
+            done
+          else
+            echo "patches/ 目录不存在，跳过补丁应用"
+          fi
+
       - name: 静态代码审查（cppcheck + shellcheck）
         run: |
           sudo apt-get install -y -qq cppcheck shellcheck 2>/dev/null || true
