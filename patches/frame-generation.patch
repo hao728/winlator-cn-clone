@@ -589,7 +589,7 @@ index c55071ec..02298c1c 100644
  }
 diff --git a/app/src/main/java/com/winlator/renderer/effects/FrameGenerationEffect.java b/app/src/main/java/com/winlator/renderer/effects/FrameGenerationEffect.java
 new file mode 100644
-index 00000000..e53c8ab5
+index 00000000..37f93d32
 --- /dev/null
 +++ b/app/src/main/java/com/winlator/renderer/effects/FrameGenerationEffect.java
 @@ -0,0 +1,1345 @@
@@ -811,7 +811,7 @@ index 00000000..e53c8ab5
 +    }
 +
 +    @Override
-+    protected ShaderMaterial createMaterial() {
++    protected ScreenMaterial createMaterial() {
 +        switch (generationMode) {
 +            case GENERATION_MODE_FAST:
 +                Log.d(TAG, "Fast generation mode selected");
@@ -1939,6 +1939,27 @@ index 00000000..e53c8ab5
 +    }
 +}
 \ No newline at end of file
+diff --git a/app/src/main/java/com/winlator/renderer/material/ShaderMaterial.java b/app/src/main/java/com/winlator/renderer/material/ShaderMaterial.java
+index aecbd1ec..a61f7c48 100644
+--- a/app/src/main/java/com/winlator/renderer/material/ShaderMaterial.java
++++ b/app/src/main/java/com/winlator/renderer/material/ShaderMaterial.java
+@@ -69,6 +69,16 @@ public abstract class ShaderMaterial {
+         GLES20.glUseProgram(programId);
+     }
+ 
++    // 兼容帧生成移植：返回当前着色器程序 ID（alexvorxx API）
++    public int getProgram() {
++        return programId;
++    }
++
++    // 兼容帧生成移植：按字符串名获取 uniform location（与 private 的 Uniform 重载共存）
++    public int getUniformLocation(String name) {
++        return programId != 0 ? GLES20.glGetUniformLocation(programId, name) : -1;
++    }
++
+     private int getUniformLocation(Uniform uniform) {
+         if (uniform.location != -1) return uniform.location;
+         int location = programId != 0 ? GLES20.glGetUniformLocation(programId, uniform.name) : -1;
 diff --git a/app/src/main/java/com/winlator/widget/FrameGenerationView.java b/app/src/main/java/com/winlator/widget/FrameGenerationView.java
 new file mode 100644
 index 00000000..1f131ff1
