@@ -1,15 +1,49 @@
 apply plugin: 'com.android.application'
 
+// ============================================================
+// 版本号单一来源：跟随上游 hostei33/winlator-cn
+// 升级上游时只需改这两个值；coexist 变体的 versionCode 自动 +1000
+// ============================================================
+def baseVersionCode = 33
+def baseVersionName = "11.2.cn.04"
+
 android {
     namespace 'com.winlator'
     compileSdk 35
 
     defaultConfig {
-        applicationId '__APP_ID__'
+        // 注意：applicationId 不在此设置，统一由下方 productFlavors 提供，
+        // 避免出现“未显式声明包名”的歧义变体
         minSdkVersion 26
         targetSdkVersion 28
-        versionCode __VERSION_CODE__
-        versionName "__VERSION_NAME__"
+        versionCode baseVersionCode
+        versionName baseVersionName
+    }
+
+    // ============================================================
+    // 多包名变体（productFlavors 是 Gradle 官方机制，参考 winhub-emu/winhub）
+    //   standard：原版包名 com.winlator，用于验证共存改动没有破坏原版行为
+    //   coexist ：共存包名 org.winlator，CI 默认构建并发布此变体
+    //
+    // 【如何改共存包名】只改 coexist.applicationId 一处。
+    //   硬约束：新包名必须与 com.winlator 等长（12 个字符，含点号），
+    //   因为 glibc rootfs 的二进制里硬编码了 /data/data/com.winlator/... 前缀，
+    //   运行时由 core/PatchUtils.java 做等长字节替换 + 别名软链，不等长会破坏 ELF。
+    //   可用：org.winlator / net.winlator / io.winlator（均 12 字符）
+    // ============================================================
+    flavorDimensions "variant"
+    productFlavors {
+        standard {
+            dimension "variant"
+            applicationId "com.winlator"
+        }
+        coexist {
+            dimension "variant"
+            applicationId "org.winlator"
+            // +1000：让共存版 versionCode 始终高于历史发布（旧共存版为 1032），
+            // 避免覆盖安装时因 versionCode 比已装版本低而被系统拒绝
+            versionCode baseVersionCode + 1000
+        }
     }
 
     buildFeatures {
@@ -36,7 +70,7 @@ android {
 
     lintOptions {
         checkReleaseBuilds false
-        // 先观察模式：不阻断构建，只输出报告；清理完 lint 问题后改为 true 开启阻断
+        // 观察模式：不阻断构建，只输出报告；清理完 lint 问题后改为 true 开启阻断
         abortOnError false
         warningsAsErrors false
         // 忽略已知误报（旧版兼容代码、第三方 native 桥接）
@@ -45,6 +79,8 @@ android {
                 'GoogleAppIndexingWarning', 'MissingApplicationIcon'
     }
 
+    // 本仓库 CI 始终做完整 native 编译以产出可直接运行的整包，
+    // 因此这里不使用上游“仅编译 Java”的 -PskipNative 开关
     ndkVersion '24.0.8215888'
 
     externalNativeBuild {

@@ -1,7 +1,5 @@
 package com.winlator;
 
-import com.winlator.services.ForegroundService;
-
 import android.app.Activity;
 import android.app.PictureInPictureParams;
 import android.content.ClipData;
@@ -10,6 +8,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.ActivityInfo;
+import android.content.res.Configuration;
 import android.os.Bundle;
 import android.view.KeyEvent;
 import android.view.Menu;
@@ -70,6 +69,7 @@ import com.winlator.inputcontrols.ExternalController;
 import com.winlator.inputcontrols.InputControlsManager;
 import com.winlator.math.Mathf;
 import com.winlator.renderer.GLRenderer;
+import com.winlator.services.ForegroundService;
 import com.winlator.widget.FrameRating;
 import com.winlator.widget.InputControlsView;
 import com.winlator.widget.MagnifierView;
@@ -142,6 +142,11 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
     private Win32AppWorkarounds win32AppWorkarounds;
     private String screenEffectProfile;
 
+    /**
+     * 创建显示会话并初始化容器运行所需的界面与服务状态。
+     *
+     * @param savedInstanceState 先前保存的 Activity 状态
+     */
     @Override
     public void onCreate(Bundle savedInstanceState) {
         AppUtils.setActivityTheme(this);
@@ -149,9 +154,7 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
         AppUtils.hideSystemUI(this);
         AppUtils.keepScreenOn(this);
         setContentView(R.layout.xserver_display_activity);
-
-        PreferenceManager.getDefaultSharedPreferences(this).edit().putBoolean("container_running", true).apply();
-        startService(new Intent(this, ForegroundService.class));
+        ForegroundService.startSession(this);
 
         final PreloaderDialog preloaderDialog = new PreloaderDialog(this);
         preferences = PreferenceManager.getDefaultSharedPreferences(this);
@@ -336,6 +339,9 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
         }
     }
 
+    /**
+     * 恢复显示环境，并通知前台服务当前会话已进入前台。
+     */
     @Override
     public void onResume() {
         super.onResume();
@@ -347,10 +353,15 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
             inputControlsView.setOverlayOpacity(preferences.getFloat("overlay_opacity", InputControlsView.DEFAULT_OVERLAY_OPACITY));
             inputControlsView.invalidate();
         }
+        ForegroundService.onResumeSession(this);
     }
 
+    /**
+     * 暂停显示环境，并通知前台服务当前会话已离开前台。
+     */
     @Override
     public void onPause() {
+        ForegroundService.onPauseSession(this);
         super.onPause();
         if (environment != null && !isInPictureInPictureMode() && !isInMultiWindowMode()) {
             environment.onPause();
@@ -358,10 +369,26 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
         }
     }
 
+    /**
+     * 同步画中画模式与前台服务的会话状态。
+     *
+     * @param isInPictureInPictureMode 当前是否处于画中画模式
+     * @param newConfig 模式切换后的设备配置
+     */
+    @Override
+    public void onPictureInPictureModeChanged(boolean isInPictureInPictureMode, Configuration newConfig) {
+        super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig);
+        ForegroundService.setPipMode(isInPictureInPictureMode);
+    }
+
+    /**
+     * 销毁显示环境并结束对应的前台服务会话。
+     */
     @Override
     protected void onDestroy() {
         winHandler.stop();
         if (environment != null) environment.stopEnvironmentComponents();
+        ForegroundService.stopSession(this);
         super.onDestroy();
     }
 
@@ -476,9 +503,10 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
         }
     }
 
+    /**
+     * 停止当前容器环境、重启应用并结束前台服务会话。
+     */
     private void exit() {
-        preferences.edit().putBoolean("container_running", false).apply();
-        stopService(new Intent(this, ForegroundService.class));
         winHandler.stop();
         if (environment != null) environment.stopEnvironmentComponents();
 
@@ -490,6 +518,7 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
             AppUtils.restartApplication(this, options);
         }
         else AppUtils.restartApplication(this);
+        ForegroundService.stopSession(this);
     }
 
     private void setupWineSystemFiles() {
@@ -809,6 +838,9 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
         inputControlsView.invalidate();
     }
 
+    /**
+     * 准备所选图形驱动文件，并配置驱动对应的环境变量。
+     */
     private void extractGraphicsDriverFiles() {
         envVars.put("vblank_mode", "0");
 
@@ -837,6 +869,7 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
         }
 
         if (graphicsDriver[0].equals(GraphicsDrivers.TURNIP)) {
+            // 共存版定制：Turnip 强制 mailbox 呈现模式，降低帧率抖动下的显示延迟
             envVars.put("MESA_VK_WSI_PRESENT_MODE", "mailbox");
             TurnipConfigDialog.setEnvVars(this, graphicsDriverConfig[0], envVars);
 
