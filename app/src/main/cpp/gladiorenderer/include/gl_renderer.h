@@ -163,6 +163,9 @@ typedef struct GLRenderer {
 } GLRenderer;
 
 extern void GLRenderer_initOnEGLContext(GLRenderer* renderer);
+/* 查询真实驱动是否支持 GL_EXT_texture_compression_s3tc。结果进程内缓存，首次调用必须在
+   EGL 上下文已 current 时进行（glGetString 依赖当前上下文）。 */
+extern bool GLRenderer_isS3TCPassthroughSupported();
 extern bool GLRenderer_useARBProgram(GLRenderer* renderer, bool fullUpdate);
 extern void GLRenderer_drawImmediate(GLRenderer* renderer);
 extern void GLRenderer_beginImmediate(GLRenderer* renderer, GLenum mode);
@@ -200,7 +203,7 @@ extern void GLRenderer_disableVertexAttribute(GLRenderer* renderer, int location
 extern void GLRenderer_disableUnusedVertexAttributes(GLRenderer* renderer);
 extern void GLRenderer_resetFrameCount(GLRenderer* renderer);
 extern void GLRenderer_invalidatePixelReadCache(GLRenderer* renderer);
-extern void GLRenderer_readPixels(GLRenderer* renderer, GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type, void* pixels);
+extern void GLRenderer_readPixels(GLRenderer* renderer, GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type, void* pixels, bool allowCache);
 
 extern thread_local GLRenderer* currentRenderer;
 
