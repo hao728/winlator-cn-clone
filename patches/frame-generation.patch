@@ -71,7 +71,7 @@ index 00000000..c26f7128
 +}
 \ No newline at end of file
 diff --git a/app/src/main/java/com/winlator/XServerDisplayActivity.java b/app/src/main/java/com/winlator/XServerDisplayActivity.java
-index f262514f..9ef972d9 100644
+index f262514f..bcb57c1c 100644
 --- a/app/src/main/java/com/winlator/XServerDisplayActivity.java
 +++ b/app/src/main/java/com/winlator/XServerDisplayActivity.java
 @@ -74,6 +74,7 @@ import com.winlator.widget.FrameRating;
@@ -90,6 +90,14 @@ index f262514f..9ef972d9 100644
      private XEnvironment environment;
      private DrawerLayout drawerLayout;
      private Container container;
+@@ -697,6 +699,7 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
+         if (container != null && container.getHUDMode() != FrameRating.Mode.DISABLED.ordinal()) {
+             frameRating = new FrameRating(this);
+             frameRating.setMode(FrameRating.Mode.values()[container.getHUDMode()]);
++            frameRating.setRenderer(xServerView.getRenderer());
+             frameRating.setVisibility(View.GONE);
+             rootView.addView(frameRating);
+         }
 diff --git a/app/src/main/java/com/winlator/contentdialog/ScreenEffectDialog.java b/app/src/main/java/com/winlator/contentdialog/ScreenEffectDialog.java
 index 2c8d99c8..7862c7b4 100644
 --- a/app/src/main/java/com/winlator/contentdialog/ScreenEffectDialog.java
@@ -150,7 +158,7 @@ index 2c8d99c8..7862c7b4 100644
          sbBrightness.setValue(0);
          sbContrast.setValue(0);
 diff --git a/app/src/main/java/com/winlator/renderer/EffectComposer.java b/app/src/main/java/com/winlator/renderer/EffectComposer.java
-index 79ea768a..9ff0b2a9 100644
+index 79ea768a..3acbfa3f 100644
 --- a/app/src/main/java/com/winlator/renderer/EffectComposer.java
 +++ b/app/src/main/java/com/winlator/renderer/EffectComposer.java
 @@ -1,35 +1,87 @@
@@ -217,12 +225,12 @@ index 79ea768a..9ff0b2a9 100644
 +    private void initBuffers() {
 +        if (readBuffer == null) {
 +            readBuffer = new RenderTarget();
-+            readBuffer.allocateFramebuffer(renderer.getSurfaceWidth(), renderer.getSurfaceHeight());
++            readBuffer.allocateFramebuffer(renderer.surfaceWidth, renderer.surfaceHeight);
 +        }
 +
 +        if (writeBuffer == null) {
 +            writeBuffer = new RenderTarget();
-+            writeBuffer.allocateFramebuffer(renderer.getSurfaceWidth(), renderer.getSurfaceHeight());
++            writeBuffer.allocateFramebuffer(renderer.surfaceWidth, renderer.surfaceHeight);
 +        }
      }
  
@@ -251,7 +259,7 @@ index 79ea768a..9ff0b2a9 100644
          }
          return null;
      }
-@@ -38,55 +90,276 @@ public class EffectComposer {
+@@ -38,55 +90,274 @@ public class EffectComposer {
          return !effects.isEmpty();
      }
  
@@ -266,8 +274,8 @@ index 79ea768a..9ff0b2a9 100644
 +            }
 +        }
 +        renderer.xServerView.requestRender();
-+    }
-+
+     }
+ 
 +    private int determineFrameSequence() {
 +        if (frameGenerationEffect != null && frameGenerationEffect.isEnabled()) {
 +            // Frame type
@@ -283,8 +291,8 @@ index 79ea768a..9ff0b2a9 100644
 +        } else {
 +            return 0;
 +        }
-     }
- 
++    }
++
 +    // Renders all the effects in the composer
 +    public synchronized void render() {
 +        if (isRendering) {
@@ -432,8 +440,6 @@ index 79ea768a..9ff0b2a9 100644
 +        readBuffer = tmp;
 +    }
 +
-+        renderer.xServerView.requestRender();
-+    }
 +
 +    public synchronized void configureFrameGeneration(int initialFPS, int mode) {
 +        if (frameGenerationEffect != null) {
@@ -514,12 +520,12 @@ index 79ea768a..9ff0b2a9 100644
 +            );
          }
 +        return null;
-     }
++    }
 +
 +    public void setAntiArtefactsFixNeeded(boolean antiArtefactsFixNeeded) {
 +        this.antiArtefactsFixNeeded = antiArtefactsFixNeeded;
 +        Log.d(TAG, "antiArtefactsFixNeeded = " + antiArtefactsFixNeeded);
-+    }
+     }
 +
 +    public boolean isAntiArtefactsFixNeeded() {
 +        return antiArtefactsFixNeeded;
@@ -2486,245 +2492,69 @@ index 00000000..1f131ff1
 +}
 \ No newline at end of file
 diff --git a/app/src/main/java/com/winlator/widget/FrameRating.java b/app/src/main/java/com/winlator/widget/FrameRating.java
-index 6597d3e5..a0f2ea3f 100644
+index 6597d3e5..aa8b4563 100644
 --- a/app/src/main/java/com/winlator/widget/FrameRating.java
 +++ b/app/src/main/java/com/winlator/widget/FrameRating.java
-@@ -1,111 +1,92 @@
-+/*
-+ * Ported from alexvorxx/winlator (MIT License)
-+ * Copyright (c) 2023 BrunoSX
-+ * MIT License: https://github.com/alexvorxx/winlator/blob/main/LICENSE
-+ */
-+
- package com.winlator.widget;
- 
- import android.app.ActivityManager;
-+import android.content.BroadcastReceiver;
- import android.content.Context;
-+import android.content.Intent;
-+import android.content.IntentFilter;
-+import android.os.BatteryManager;
-+import android.os.Handler;
- import android.os.SystemClock;
- import android.util.AttributeSet;
- import android.view.LayoutInflater;
- import android.view.View;
- import android.widget.FrameLayout;
--import android.widget.LinearLayout;
- import android.widget.TextView;
- 
- import com.winlator.R;
--import com.winlator.box64.Box64Utils;
--import com.winlator.core.CPUStatus;
--import com.winlator.core.StringUtils;
+@@ -14,6 +14,8 @@ import com.winlator.R;
+ import com.winlator.box64.Box64Utils;
+ import com.winlator.core.CPUStatus;
+ import com.winlator.core.StringUtils;
 +import com.winlator.renderer.EffectComposer;
 +import com.winlator.renderer.GLRenderer;
  
  import java.util.Locale;
  
- public class FrameRating extends FrameLayout implements Runnable {
--    public enum Mode {DISABLED, SIMPLE, FULL}
-     private long lastTime = 0;
--    private short frameCount = 0;
-+    private int frameCount = 0;
-     private float lastFPS = 0;
--    private final LinearLayout fpsPanel;
--    private final LinearLayout gpuPanel;
--    private final LinearLayout ramPanel;
--    private final LinearLayout cpuPanel;
--    private Mode mode = Mode.SIMPLE;
-+    private float realFPS = 0;
-+    private float targetFPS = 0;
+@@ -32,6 +34,11 @@ public class FrameRating extends FrameLayout implements Runnable {
+     private String cpuInfo = null;
+     private byte tick = 0;
+ 
++    // 帧生成倍率显示（由 XServerDisplayActivity 注入 renderer；为 null 时不影响原有 HUD）
++    private GLRenderer renderer;
 +    private int fpsMultiplier = 2;
-+    private final TextView textViewFPS;
-+    private final TextView textViewRAM;
-+    private final TextView textViewBatteryTemp;
-+    private final TextView textViewRAMName;
-+    private final TextView textViewBatteryTempName;
-     private ActivityManager activityManager;
-     private ActivityManager.MemoryInfo memoryInfo;
--    private String cpuInfo = null;
--    private byte tick = 0;
-+    private BroadcastReceiver batteryReceiver;
-+    private int batteryTemperature;
-+    private final GLRenderer renderer;
 +    private boolean frameGenerationEnabled = false;
- 
--    public FrameRating(Context context) {
--        this(context, null);
-+    public FrameRating(Context context, GLRenderer renderer) {
-+        this(context, renderer, null);
++
+     public FrameRating(Context context) {
+         this(context, null);
+     }
+@@ -94,6 +101,25 @@ public class FrameRating extends FrameLayout implements Runnable {
+         setupPanels();
      }
  
--    public FrameRating(Context context, AttributeSet attrs) {
--        this(context, attrs, 0);
-+    public FrameRating(Context context, GLRenderer renderer, AttributeSet attrs) {
-+        this(context, renderer, attrs, 0);
-     }
- 
--    public FrameRating(Context context, AttributeSet attrs, int defStyleAttr) {
-+    public FrameRating(Context context, GLRenderer renderer, AttributeSet attrs, int defStyleAttr) {
-         super(context, attrs, defStyleAttr);
- 
-         View view = LayoutInflater.from(context).inflate(R.layout.frame_rating, this, false);
--        fpsPanel = view.findViewById(R.id.LLFPSPanel);
--        gpuPanel = view.findViewById(R.id.LLGPUPanel);
--        ramPanel = view.findViewById(R.id.LLRAMPanel);
--        cpuPanel = view.findViewById(R.id.LLCPUPanel);
-+        textViewFPS = view.findViewById(R.id.TVFPS);
-+        textViewRAM = view.findViewById(R.id.TVRAM);
-+        textViewBatteryTemp = view.findViewById(R.id.TVBatteryTemp);
-+        textViewRAMName = view.findViewById(R.id.TVRAMName);
-+        textViewBatteryTempName = view.findViewById(R.id.TVBatteryTempName);
-         addView(view);
--        setupPanels();
--    }
--
--    private void setupPanels() {
--        switch (mode) {
--            case DISABLED:
--                fpsPanel.setVisibility(GONE);
--                gpuPanel.setVisibility(GONE);
--                ramPanel.setVisibility(GONE);
--                cpuPanel.setVisibility(GONE);
--                
--                activityManager = null;
--                memoryInfo = null;
--                break;
--            case SIMPLE:
--                fpsPanel.setVisibility(VISIBLE);
--                gpuPanel.setVisibility(GONE);
--                ramPanel.setVisibility(GONE);
--                cpuPanel.setVisibility(GONE);
--
--                activityManager = null;
--                memoryInfo = null;
--                break;
--            case FULL:
--                fpsPanel.setVisibility(VISIBLE);
--                gpuPanel.setVisibility(VISIBLE);
--                ramPanel.setVisibility(VISIBLE);
--                cpuPanel.setVisibility(VISIBLE);
--
--                Context context = getContext();
--                activityManager = (ActivityManager)context.getSystemService(Context.ACTIVITY_SERVICE);
--                memoryInfo = new ActivityManager.MemoryInfo();
--                break;
--        }
--    }
- 
--    public Mode getMode() {
--        return mode;
--    }
-+        activityManager = (ActivityManager)context.getSystemService(Context.ACTIVITY_SERVICE);
-+        memoryInfo = new ActivityManager.MemoryInfo();
- 
--    public void setMode(Mode mode) {
--        this.mode = mode;
--        setupPanels();
--    }
++    // 注入渲染器用于读取帧生成状态（不改变原有构造函数签名）
++    public void setRenderer(GLRenderer renderer) {
 +        this.renderer = renderer;
- 
--    public void setGPUInfo(String gpuInfo) {
--        post(() -> ((TextView)gpuPanel.getChildAt(1)).setText(gpuInfo));
--    }
-+        batteryReceiver = new BroadcastReceiver() {
-+            @Override
-+            public void onReceive(Context context, Intent intent) {
-+                String action = intent.getAction();
-+                if (action != null && action.equals(Intent.ACTION_BATTERY_CHANGED)) {
-+                    int temperature = intent.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, 0);
-+                    batteryTemperature = (int)(temperature / 10.0f);
-+                }
-+            }
-+        };
- 
--    public void reset() {
--        frameCount = 0;
--        lastTime = SystemClock.elapsedRealtime();
--        lastFPS = 0;
--        tick = 2;
-+        IntentFilter filter = new IntentFilter();
-+        filter.addAction(Intent.ACTION_BATTERY_CHANGED);
-+        context.registerReceiver(batteryReceiver, filter);
-     }
- 
-     public void update() {
-+        if (lastTime == 0) lastTime = SystemClock.elapsedRealtime();
-         long time = SystemClock.elapsedRealtime();
-         if (time >= lastTime + 500) {
-             lastFPS = ((float)(frameCount * 1000) / (time - lastTime));
-@@ -120,23 +101,55 @@ public class FrameRating extends FrameLayout implements Runnable {
-     @Override
-     public void run() {
-         if (getVisibility() == GONE) setVisibility(View.VISIBLE);
--        ((TextView)fpsPanel.getChildAt(1)).setText(String.format(Locale.ENGLISH, "%.1f", lastFPS));
- 
--        if (mode == Mode.FULL && ++tick >= 2) {
--            tick = 0;
--            activityManager.getMemoryInfo(memoryInfo);
--            long usedMem = memoryInfo.totalMem - memoryInfo.availMem;
--            String ramText = StringUtils.formatBytes(usedMem, false)+"/"+StringUtils.formatBytes(memoryInfo.totalMem);
--            ((TextView)ramPanel.getChildAt(1)).setText(ramText);
-+        updateFPSMultiplier();
-+        if (frameGenerationEnabled)
-+            textViewFPS.setText(String.format(Locale.ENGLISH, "%.1f → %.1f", lastFPS, lastFPS * fpsMultiplier));
-+        else
-+            textViewFPS.setText(String.format(Locale.ENGLISH, "%.1f", lastFPS));
- 
--            if (cpuInfo == null) {
--                cpuInfo = "Box64 v"+ Box64Utils.extractBinVersion(cpuPanel.getContext());
--            }
-+        activityManager.getMemoryInfo(memoryInfo);
-+        long usedMem = memoryInfo.totalMem - memoryInfo.availMem;
-+        String ramText = formatBytes(usedMem, false)+"/"+formatBytes(memoryInfo.totalMem, true);
-+        textViewRAM.setText(ramText);
- 
--            short[] clockSpeeds = CPUStatus.getCurrentClockSpeeds();
--            int maxClockSpeed = 0;
--            for (short clockSpeed : clockSpeeds) maxClockSpeed = Math.max(maxClockSpeed, clockSpeed);
--            ((TextView)cpuPanel.getChildAt(1)).setText(CPUStatus.formatClockSpeed(maxClockSpeed)+" | "+cpuInfo);
-+        textViewBatteryTemp.setText(batteryTemperature + " ºC");
 +    }
 +
-+    private static String formatBytes(long bytes, boolean withSuffix) {
-+        if (bytes <= 0) return "0 bytes";
-+        final String[] units = new String[]{"bytes", "KB", "MB", "GB", "TB"};
-+        int digitGroups = (int)(Math.log10(bytes) / Math.log10(1024));
-+        String suffix = withSuffix ? " "+units[digitGroups] : "";
-+        return String.format(Locale.ENGLISH, "%.1f", bytes / Math.pow(1024, digitGroups))+suffix;
-+    }
-+
-+    public void setShowOtherCounters(boolean showOtherCounters) {
-+        if (showOtherCounters) {
-+            textViewRAMName.setVisibility(VISIBLE);
-+            textViewBatteryTempName.setVisibility(VISIBLE);
-+            textViewRAM.setVisibility(VISIBLE);
-+            textViewBatteryTemp.setVisibility(VISIBLE);
-+        } else {
-+            textViewRAMName.setVisibility(GONE);
-+            textViewBatteryTempName.setVisibility(GONE);
-+            textViewRAM.setVisibility(GONE);
-+            textViewBatteryTemp.setVisibility(GONE);
-+        }
-+    }
-+
++    // 读取帧生成倍率；帧生成未启用时返回 false，HUD 回退显示原始 FPS
 +    private void updateFPSMultiplier() {
 +        if (renderer != null && renderer.effectComposer != null) {
 +            EffectComposer.FrameGenerationSettings settings =
 +                    renderer.effectComposer.getFrameGenerationSettings();
-+
 +            if (settings != null) {
 +                frameGenerationEnabled = true;
 +                fpsMultiplier = settings.fpsMultiplier;
-+            } else {
-+                frameGenerationEnabled = false;
++                return;
 +            }
-         }
-     }
++        }
++        frameGenerationEnabled = false;
++    }
 +
- }
-\ No newline at end of file
+     public void setGPUInfo(String gpuInfo) {
+         post(() -> ((TextView)gpuPanel.getChildAt(1)).setText(gpuInfo));
+     }
+@@ -120,7 +146,11 @@ public class FrameRating extends FrameLayout implements Runnable {
+     @Override
+     public void run() {
+         if (getVisibility() == GONE) setVisibility(View.VISIBLE);
+-        ((TextView)fpsPanel.getChildAt(1)).setText(String.format(Locale.ENGLISH, "%.1f", lastFPS));
++        updateFPSMultiplier();
++        String fpsText = frameGenerationEnabled
++                ? String.format(Locale.ENGLISH, "%.1f → %.0f", lastFPS, lastFPS * fpsMultiplier)
++                : String.format(Locale.ENGLISH, "%.1f", lastFPS);
++        ((TextView)fpsPanel.getChildAt(1)).setText(fpsText);
+ 
+         if (mode == Mode.FULL && ++tick >= 2) {
+             tick = 0;
 diff --git a/app/src/main/res/layout/frame_generation_layout.xml b/app/src/main/res/layout/frame_generation_layout.xml
 new file mode 100644
 index 00000000..3ac73af0
@@ -2980,228 +2810,6 @@ index 00000000..3ac73af0
 +    </LinearLayout>
 +
 +</LinearLayout>
-\ No newline at end of file
-diff --git a/app/src/main/res/layout/frame_rating.xml b/app/src/main/res/layout/frame_rating.xml
-index 5e3441bb..a114071b 100644
---- a/app/src/main/res/layout/frame_rating.xml
-+++ b/app/src/main/res/layout/frame_rating.xml
-@@ -7,135 +7,107 @@
-     <LinearLayout
-         android:layout_width="wrap_content"
-         android:layout_height="wrap_content"
--        android:orientation="vertical"
-+        android:orientation="horizontal"
-         android:padding="2dp"
-         android:layout_marginTop="2dp"
-         android:layout_marginLeft="10dp"
-         android:gravity="center_vertical"
-         android:background="#33000000">
- 
--        <LinearLayout
--            android:id="@+id/LLFPSPanel"
-+        <TextView
-             android:layout_width="wrap_content"
-             android:layout_height="wrap_content"
--            android:orientation="horizontal"
--            android:visibility="gone">
-+            android:layout_weight="1"
-+            android:textStyle="bold"
-+            android:textSize="12dp"
-+            android:text="@string/fps_text"
-+            android:textColor="#0277BD"
-+            android:includeFontPadding="false"
-+            android:maxLines="1"
-+            android:layout_marginRight="5dp" />
- 
--            <TextView
--                android:layout_width="wrap_content"
--                android:layout_height="wrap_content"
--                android:layout_weight="1"
--                android:textStyle="bold"
--                android:textSize="12dp"
--                android:text="FPS:"
--                android:textColor="#0277bd"
--                android:includeFontPadding="false"
--                android:maxLines="1"
--                android:layout_marginRight="5dp" />
--
--            <TextView
--                android:layout_width="wrap_content"
--                android:layout_height="wrap_content"
--                android:layout_weight="1"
--                android:textStyle="bold"
--                android:textSize="12dp"
--                android:text="0"
--                android:textColor="#ffffff"
--                android:includeFontPadding="false"
--                android:maxLines="1" />
--        </LinearLayout>
--
--        <LinearLayout
--            android:id="@+id/LLGPUPanel"
-+        <TextView
-+            android:id="@+id/TVFPS"
-             android:layout_width="wrap_content"
-             android:layout_height="wrap_content"
--            android:orientation="horizontal"
--            android:visibility="gone">
--
--            <TextView
--                android:layout_width="wrap_content"
--                android:layout_height="wrap_content"
--                android:layout_weight="1"
--                android:textStyle="bold"
--                android:textSize="12dp"
--                android:text="GPU:"
--                android:textColor="#c62828"
--                android:includeFontPadding="false"
--                android:maxLines="1"
--                android:layout_marginRight="5dp" />
-+            android:layout_weight="1"
-+            android:textStyle="bold"
-+            android:textSize="12dp"
-+            android:text="0"
-+            android:textColor="#ffffff"
-+            android:includeFontPadding="false"
-+            android:maxLines="1" />
-+    </LinearLayout>
- 
--            <TextView
--                android:layout_width="wrap_content"
--                android:layout_height="wrap_content"
--                android:layout_weight="1"
--                android:textStyle="bold"
--                android:textSize="12dp"
--                android:text="0"
--                android:textColor="#ffffff"
--                android:includeFontPadding="false"
--                android:maxLines="1" />
--        </LinearLayout>
-+    <LinearLayout
-+        android:layout_width="wrap_content"
-+        android:layout_height="wrap_content"
-+        android:orientation="horizontal"
-+        android:padding="2dp"
-+        android:layout_marginTop="2dp"
-+        android:layout_marginLeft="10dp"
-+        android:gravity="center_vertical"
-+        android:background="#33000000">
- 
--        <LinearLayout
--            android:id="@+id/LLRAMPanel"
-+        <TextView
-+            android:id="@+id/TVRAMName"
-             android:layout_width="wrap_content"
-             android:layout_height="wrap_content"
--            android:orientation="horizontal"
--            android:visibility="gone">
-+            android:layout_weight="1"
-+            android:textStyle="bold"
-+            android:textSize="12dp"
-+            android:text="@string/ram_text"
-+            android:textColor="#4CAF50"
-+            android:includeFontPadding="false"
-+            android:maxLines="1"
-+            android:layout_marginRight="5dp" />
- 
--            <TextView
--                android:layout_width="wrap_content"
--                android:layout_height="wrap_content"
--                android:layout_weight="1"
--                android:textStyle="bold"
--                android:textSize="12dp"
--                android:text="RAM:"
--                android:textColor="#558b2f"
--                android:includeFontPadding="false"
--                android:maxLines="1"
--                android:layout_marginRight="5dp" />
-+        <TextView
-+            android:id="@+id/TVRAM"
-+            android:layout_width="wrap_content"
-+            android:layout_height="wrap_content"
-+            android:layout_weight="1"
-+            android:textStyle="bold"
-+            android:textSize="12dp"
-+            android:text="0"
-+            android:textColor="#ffffff"
-+            android:includeFontPadding="false"
-+            android:maxLines="1" />
-+    </LinearLayout>
- 
--            <TextView
--                android:layout_width="wrap_content"
--                android:layout_height="wrap_content"
--                android:layout_weight="1"
--                android:textStyle="bold"
--                android:textSize="12dp"
--                android:text="0"
--                android:textColor="#ffffff"
--                android:includeFontPadding="false"
--                android:maxLines="1" />
--        </LinearLayout>
-+    <LinearLayout
-+        android:layout_width="wrap_content"
-+        android:layout_height="wrap_content"
-+        android:orientation="horizontal"
-+        android:padding="2dp"
-+        android:layout_marginTop="2dp"
-+        android:layout_marginLeft="10dp"
-+        android:gravity="center_vertical"
-+        android:background="#33000000">
- 
--        <LinearLayout
--            android:id="@+id/LLCPUPanel"
-+        <TextView
-+            android:id="@+id/TVBatteryTempName"
-             android:layout_width="wrap_content"
-             android:layout_height="wrap_content"
--            android:orientation="horizontal"
--            android:visibility="gone">
-+            android:layout_weight="1"
-+            android:textStyle="bold"
-+            android:textSize="12dp"
-+            android:text="@string/battery_temperature_text"
-+            android:textColor="#FF0000"
-+            android:includeFontPadding="false"
-+            android:maxLines="1"
-+            android:layout_marginRight="5dp" />
- 
--            <TextView
--                android:layout_width="wrap_content"
--                android:layout_height="wrap_content"
--                android:layout_weight="1"
--                android:textStyle="bold"
--                android:textSize="12dp"
--                android:text="CPU:"
--                android:textColor="#ef6c00"
--                android:includeFontPadding="false"
--                android:maxLines="1"
--                android:layout_marginRight="5dp" />
--
--            <TextView
--                android:layout_width="wrap_content"
--                android:layout_height="wrap_content"
--                android:layout_weight="1"
--                android:textStyle="bold"
--                android:textSize="12dp"
--                android:text="0"
--                android:textColor="#ffffff"
--                android:includeFontPadding="false"
--                android:maxLines="1" />
--        </LinearLayout>
-+        <TextView
-+            android:id="@+id/TVBatteryTemp"
-+            android:layout_width="wrap_content"
-+            android:layout_height="wrap_content"
-+            android:layout_weight="1"
-+            android:textStyle="bold"
-+            android:textSize="12dp"
-+            android:text="0"
-+            android:textColor="#ffffff"
-+            android:includeFontPadding="false"
-+            android:maxLines="1" />
-     </LinearLayout>
- </LinearLayout>
 \ No newline at end of file
 diff --git a/app/src/main/res/layout/screen_effect_dialog.xml b/app/src/main/res/layout/screen_effect_dialog.xml
 index 6ffec6de..05669db5 100644
