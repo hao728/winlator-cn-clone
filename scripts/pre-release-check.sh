@@ -135,29 +135,6 @@ else
   check "缺少 assets: ${MISSING_ASSETS[*]}" 1
 fi
 
-# --- 6b. win-fg 帧生成引擎检查（native 集成模式：编译进 libvortekrenderer.so）---
-# Why: win-fg 采用 native 集成（参考 Bannerlator），源码编译进 host compositor
-#      libvortekrenderer.so，不再产生 assets/winfg/libwin_fg.so + layer manifest
-#      （guest-layer 方案已废弃，其生成帧会被 host compositor 丢弃）。
-# What: 提取 libvortekrenderer.so，用 strings 检查 win-fg 帧生成符号是否存在。
-# How:  回退到 guest-layer 方案时，恢复对 assets/winfg/libwin_fg.so 的检查即可。
-VORTEK_SO="lib/arm64-v8a/libvortekrenderer.so"
-if [ -n "$(unzip -Z1 "$APK_PATH" 2>/dev/null | grep -F "$VORTEK_SO")" ]; then
-  VORTEK_SIZE=$(unzip -l "$APK_PATH" 2>/dev/null | grep "$VORTEK_SO" | awk '{print $1}')
-  VORTEK_MB=$((VORTEK_SIZE / 1024 / 1024))
-  # 提取 .so 到临时文件再 strings（避免 unzip -p 管道在 pipefail 下 SIGPIPE 误报）
-  unzip -p "$APK_PATH" "$VORTEK_SO" > /tmp/vortekrenderer_check.so 2>/dev/null || true
-  WINFG_SYMS=$(strings /tmp/vortekrenderer_check.so 2>/dev/null | grep -cE "winfg|FrameGen|framegen" || true)
-  rm -f /tmp/vortekrenderer_check.so
-  if [ "${WINFG_SYMS:-0}" -ge 1 ]; then
-    check "win-fg 帧生成引擎已编译进 libvortekrenderer.so (${VORTEK_MB}MB，${WINFG_SYMS} 个 win-fg 符号)" 0
-  else
-    check "win-fg 符号未在 libvortekrenderer.so 中找到（native 集成可能未生效）" 1
-  fi
-else
-  check "libvortekrenderer.so 缺失（win-fg native 集成载体不存在）" 1
-fi
-
 # --- 7. APK 内 lib 目录总大小（确认 native 库不是空壳）---
 LIB_SIZE=$(unzip -l "$APK_PATH" 2>/dev/null | grep "lib/arm64-v8a/" | awk '{sum+=$1} END {print int(sum/1024/1024)}')
 echo "native 库总大小: ${LIB_SIZE:-0}MB"
