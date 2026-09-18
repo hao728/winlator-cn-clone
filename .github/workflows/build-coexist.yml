@@ -1,11 +1,18 @@
 name: 构建共存版APK
 
 # ============================================================
-# 触发规则（Bannerlator 模式：push 只编译，tag 才发布，PR 自动验证）
-#   - push 到 main        → 构建 APK，生成 artifacts，不创建 Release
+# 触发规则（push 只编译，tag 才发布，PR 自动验证）
+#   - push 到 main        → 构建 coexist 变体 APK，生成 artifacts，不创建 Release
 #   - push v* 开头的 tag  → 构建 + 自检 + 发布 Release
-#   - 创建/更新 PR        → 构建验证（编译 + 自检，不发布），PR 页面可直接看 CI 结果
+#   - 创建/更新 PR        → 构建验证（编译 + 自检，不发布）
 #   - 手动运行           → 按当前 ref 类型决定是否发布（branch 不发布）
+#
+# 包名由 app/build.gradle 的 productFlavors 决定（Gradle 官方多变体机制）：
+#   standard → com.winlator（原版，本 CI 不发布，仅本地/手动验证）
+#   coexist  → org.winlator（共存版，本 CI 构建并发布）
+# 不再使用 apply-config.sh 占位符替换，也不在编译期改 assets；
+# rootfs 内硬编码路径统一由 App 运行时的 core/PatchUtils.java 等长替换
+# + 别名软链处理（与上游“MT 管理器改包”路线完全等价）。
 # ============================================================
 on:
   push:
@@ -21,6 +28,10 @@ on:
 env:
   JAVA_VERSION: '17'
   NDK_VERSION: '24.0.8215888'
+  # 本 CI 发布的变体及其包名 / 版本名（与 build.gradle 的 coexist flavor 保持一致）
+  FLAVOR: 'coexist'
+  APP_ID: 'org.winlator'
+  VERSION_NAME: '11.2.cn.04'
 
 permissions:
   contents: write
@@ -37,19 +48,29 @@ jobs:
 
       - name: 安装依赖
         run: |
-          pip install zstandard
           sudo apt-get update -qq && sudo apt-get install -y -qq aapt apksigner unzip 2>/dev/null || true
 
       # ============================================================
+      # 清理已废弃文件（旧占位符方案 + win-fg 死代码）
+      # Why: 共存已改用 build.gradle 的 productFlavors + App 运行时 PatchUtils，
+      #      旧的 apply-config.sh 占位符替换、patch-assets.py 编译期改 rootfs、
+      #      win-fg 配置类均不再使用；保留它们会让 shellcheck 扫到旧脚本，
+      #      死代码也可能被误引用。
+      # What: 仅在 CI 工作区删除，保证本次构建干净；仓库里的副本可另行手动删除。
+      # How:  删除本步骤即停止清理（文件仍在但不参与新流程）。
+      # ============================================================
+      - name: 清理废弃文件
+        run: |
+          rm -f scripts/apply-config.sh scripts/patch-assets.py coexist.properties
+          rm -f app/src/main/java/com/winlator/core/WinFGConfig.java
+          rm -f app/src/main/java/com/winlator/core/LogCaptureHelper.java
+          echo "废弃文件清理完成"
+
+      # ============================================================
       # 静态代码审查（编译前拦截，独立于编译结果）
-      # Why: 仅靠"编译通过 + 真机不闪退"判断代码质量太滞后（两个信号都太晚）。
-      #      本步骤在编译前扫描 native C/C++ 与 shell 脚本的高危问题：
-      #        - cppcheck: 空指针/越界/未初始化/内存泄漏等确定性缺陷（error 阻断）
-      #        - shellcheck: scripts/*.sh 语法与常见陷阱
-      # What: error 级别直接终止构建（fail-fast）；warning 只打印不阻断，
-      #       避免误报拖累正常构建（用户核心诉求：构建稳定优先）。
-      # How:  删除本步骤即回退到"无静态审查"；--enable=error 只查确定性问题，
-      #       误报率极低。Java 层由 gradle 编译时的 javac 承担（不跑全量 lint 以免拖垮 CI）。
+      #   - cppcheck: 空指针/越界/未初始化/内存泄漏等确定性缺陷（error 阻断）
+      #   - shellcheck: scripts/*.sh 语法与常见陷阱（仅警告不阻断）
+      # 删除本步骤即回退到“无静态审查”。
       # ============================================================
       - name: 静态代码审查（cppcheck + shellcheck）
         run: |
@@ -71,24 +92,14 @@ jobs:
           fi
           echo "静态审查完成"
 
-      - name: 读取共存配置
-        id: config
+      - name: 诊断：确认变体配置与 assets 完整
         run: |
-          chmod +x scripts/apply-config.sh
-          bash scripts/apply-config.sh coexist.properties app/build.gradle
-
-      - name: 对 assets 做等长包名替换
-        run: |
-          python3 scripts/patch-assets.py --config coexist.properties --assets-dir app/src/main/assets
-
-      - name: 诊断：确认 assets 未丢失
-        run: |
-          echo "=== assets 目录大小 ==="
+          echo "=== productFlavors 配置 ==="
+          grep -nE 'flavorDimensions|productFlavors|standard|coexist|applicationId|versionCode|versionName' app/build.gradle
+          echo "=== assets 目录大小（不应被任何步骤改写）==="
           du -sh app/src/main/assets/
           echo "=== rootfs.tzst ==="
           ls -lh app/src/main/assets/rootfs.tzst
-          echo "=== build.gradle 关键行 ==="
-          grep -E "applicationId|versionCode|versionName" app/build.gradle
 
       - name: 校验 gradle.properties
         run: |
@@ -104,11 +115,8 @@ jobs:
 
       - name: Setup Android SDK（用 runner 预装，不下载）
         run: |
-          # Why: android-actions/setup-android@v3/v4 在新 runner 上会误判
-          #      sdkmanager 版本并尝试下载 commandline tools，常卡住失败。
-          #      GitHub ubuntu runner 已预装 Android SDK，直接用即可。
-          # What: 定位预装 sdkmanager，接受许可证，不下载任何东西。
-          # How:  删掉本步骤恢复用 android-actions/setup-android。
+          # android-actions/setup-android 在新 runner 上会误判 sdkmanager 版本并
+          # 尝试下载 commandline tools，常卡住失败；GitHub ubuntu runner 已预装 SDK。
           echo "ANDROID_HOME=$ANDROID_HOME"
           SDKMANAGER=$(find "$ANDROID_HOME" -maxdepth 5 -name sdkmanager -type f 2>/dev/null | head -1)
           if [ -z "$SDKMANAGER" ]; then
@@ -118,7 +126,6 @@ jobs:
             exit 1
           fi
           echo "使用 sdkmanager: $SDKMANAGER"
-          # 接受许可证（重试 3 次）
           for i in 1 2 3; do
             yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 && break
             echo "许可证接受重试 $i..."
@@ -130,24 +137,20 @@ jobs:
       - name: 安装 NDK 和 CMake
         run: |
           SDKMANAGER="${{ env.SDKMANAGER_PATH }}"
-          echo "使用 sdkmanager: $SDKMANAGER"
           test -x "$SDKMANAGER" || { echo "::error::sdkmanager 路径无效: $SDKMANAGER"; exit 1; }
           NDK_DIR="$ANDROID_HOME/ndk/${{ env.NDK_VERSION }}"
-          # NDK：已预装则跳过，否则安装（自动接受许可证，2>/dev/null 抑制 Broken pipe）
           if [ -d "$NDK_DIR" ]; then
             echo "✅ NDK ${{ env.NDK_VERSION }} 已预装，跳过"
           else
             echo "安装 NDK ${{ env.NDK_VERSION }}..."
             yes 2>/dev/null | "$SDKMANAGER" --install "ndk;${{ env.NDK_VERSION }}" 2>&1 | tail -10
           fi
-          # CMake：已预装则跳过
           if [ -d "$ANDROID_HOME/cmake/3.22.1" ]; then
             echo "✅ CMake 3.22.1 已预装，跳过"
           else
             echo "安装 CMake 3.22.1..."
             yes 2>/dev/null | "$SDKMANAGER" --install "cmake;3.22.1" 2>&1 | tail -10
           fi
-          # 最终验证
           test -d "$NDK_DIR" || { echo "::error::NDK 未安装成功，当前 ndk 目录:"; ls "$ANDROID_HOME/ndk/" 2>/dev/null || echo "(空)"; exit 1; }
           test -d "$ANDROID_HOME/cmake/3.22.1" || { echo "::error::CMake 未安装成功"; ls "$ANDROID_HOME/cmake/" 2>/dev/null || echo "(空)"; exit 1; }
           echo "✅ NDK 和 CMake 就绪"
@@ -178,32 +181,29 @@ jobs:
       - name: Android Lint（Java/XML 静态检查，观察模式不阻断）
         run: |
           chmod +x gradlew
-          echo "── 运行 Android Lint（Java/XML 静态检查）──"
-          echo "Why:  补充 cppcheck 不覆盖的 Java/XML 层问题（空指针、资源引用、API 兼容等）"
-          echo "What: 扫描 app/src/main/java + app/src/main/res，输出报告"
-          echo "How:  当前为观察模式（abortOnError=false），不阻断构建；清理完后改为阻断"
+          echo "── 运行 Android Lint（coexist 变体，观察模式不阻断）──"
           set +e
-          ./gradlew lintRelease --no-daemon --continue > lint.log 2>&1
+          ./gradlew lintCoexistRelease --no-daemon --continue > lint.log 2>&1
           LINT_EXIT=$?
           echo "Lint 退出码: $LINT_EXIT（观察模式下非 0 不阻断）"
           echo "── Lint 结果摘要 ──"
-          if [ -f app/build/reports/lint-results-release.xml ]; then
-            FATAL=$(grep -c 'severity="Fatal"' app/build/reports/lint-results-release.xml 2>/dev/null || echo 0)
-            ERROR=$(grep -c 'severity="Error"' app/build/reports/lint-results-release.xml 2>/dev/null || echo 0)
-            WARNING=$(grep -c 'severity="Warning"' app/build/reports/lint-results-release.xml 2>/dev/null || echo 0)
+          if [ -f app/build/reports/lint-results-coexistRelease.xml ]; then
+            FATAL=$(grep -c 'severity="Fatal"' app/build/reports/lint-results-coexistRelease.xml 2>/dev/null || echo 0)
+            ERROR=$(grep -c 'severity="Error"' app/build/reports/lint-results-coexistRelease.xml 2>/dev/null || echo 0)
+            WARNING=$(grep -c 'severity="Warning"' app/build/reports/lint-results-coexistRelease.xml 2>/dev/null || echo 0)
             echo "  Fatal: $FATAL, Error: $ERROR, Warning: $WARNING"
-            grep 'severity="Error"\|severity="Fatal"' app/build/reports/lint-results-release.xml 2>/dev/null | head -10 | sed 's/.*id="\([^"]*\)".*message="\([^"]*\)".*/  [\1] \2/' | cut -c1-120
+            grep 'severity="Error"\|severity="Fatal"' app/build/reports/lint-results-coexistRelease.xml 2>/dev/null | head -10 | sed 's/.*id="\([^"]*\)".*message="\([^"]*\)".*/  [\1] \2/' | cut -c1-120
           else
             echo "  未生成报告，见 lint.log"
             tail -20 lint.log
           fi
           echo "Lint 完成（观察模式，不阻断）"
 
-      - name: 构建 Release APK
+      - name: 构建 coexist Release APK
         run: |
           chmod +x gradlew
           set +e
-          ./gradlew assembleRelease --no-daemon --stacktrace \
+          ./gradlew assembleCoexistRelease --no-daemon --stacktrace \
             -Pandroid.injected.signing.store.file=${{ steps.keystore.outputs.keystore_path }} \
             -Pandroid.injected.signing.store.password=${{ steps.keystore.outputs.keystore_pass }} \
             -Pandroid.injected.signing.key.alias=${{ steps.keystore.outputs.key_alias }} \
@@ -222,8 +222,8 @@ jobs:
 
       - name: 确认 APK
         run: |
-          ls -lh app/build/outputs/apk/release/
-          APK=$(ls app/build/outputs/apk/release/*.apk | head -1)
+          ls -lh app/build/outputs/apk/coexist/release/
+          APK=$(ls app/build/outputs/apk/coexist/release/*.apk | head -1)
           echo "APK_PATH=$APK" >> $GITHUB_ENV
 
       - name: 重命名 APK
@@ -252,7 +252,7 @@ jobs:
           retention-days: 30
 
       # ============================================================
-      # 发布 Release：仅当本次运行由 git tag 触发（Bannerlator 模式）
+      # 发布 Release：仅当本次运行由 git tag 触发
       # 普通 push / 手动运行（branch）→ 只编译，不发布
       # ============================================================
       - name: 发布 Release
@@ -260,15 +260,12 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: "*.apk"
-          # 简洁标准命名（跟随上游 winlator-cn：WinlatorCN 11.0F beta1）
-          # 包名 / win-fg 版本等细节已写入 RELEASE_NOTES.md，不堆在标题
-          name: "WinlatorCN ${{ env.VERSION_NAME }}"
+          name: "WinlatorCN ${{ env.VERSION_NAME }} 共存版"
           tag_name: ${{ github.ref_name }}
           draft: false
           # 自检全过无警告 → 正式版（自动 Latest）；有跳过项 → pre-release（需人工验证）
           prerelease: ${{ env.SELF_CHECK_NEED_MANUAL == '1' }}
           body_path: RELEASE_NOTES.md
-          # 正式版自动设为 Latest，预发布版不覆盖 Latest
           make_latest: ${{ env.SELF_CHECK_NEED_MANUAL == '0' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

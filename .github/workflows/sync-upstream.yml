@@ -97,43 +97,29 @@ jobs:
             # --- 项目治理/文档（我们自己写的，绝不能被上游覆盖）---
             "README.md"
             "CHANGELOG.md"
-            "coexist.properties"
-            # --- 构建配置（共存版定制）---
+            # --- 构建配置（productFlavors 共存变体 / 编译兼容，核心定制）---
             "app/build.gradle"
             "gradle.properties"
             "app/src/main/AndroidManifest.xml"
-            # --- 共存核心 Java 源码 ---
+            "app/src/main/cpp/gladiorenderer/CMakeLists.txt"
+            # --- 共存与定制 Java（上游是硬编码/原版，冲突时必须保留我们的）---
+            "app/src/main/java/com/winlator/MainApplication.java"
             "app/src/main/java/com/winlator/container/Container.java"
-            "app/src/main/java/com/winlator/core/AppUtils.java"
             "app/src/main/java/com/winlator/core/FileUtils.java"
-            "app/src/main/java/com/winlator/core/LogCaptureHelper.java"
-            "app/src/main/java/com/winlator/core/WinFGConfig.java"
             "app/src/main/java/com/winlator/widget/EnvVarsView.java"
             "app/src/main/java/com/winlator/winhandler/WinHandler.java"
-            "app/src/main/java/com/winlator/ContainerDetailFragment.java"
-            # --- win-fg UI 资源 ---
-            "app/src/main/res/layout/container_detail_fragment.xml"
-            "app/src/main/res/values/arrays.xml"
+            # --- 中文化补全（上游缺失的中文呈现模式数组）---
             "app/src/main/res/values-zh/arrays.xml"
-            # --- native 共存改动 ---
-            "app/src/main/cpp/gladiorenderer/CMakeLists.txt"
-            # --- win-fg native 帧生成集成 ---
-            "app/src/main/cpp/vortekrenderer/CMakeLists.txt"
-            "app/src/main/cpp/vortekrenderer/src/main.c"
-            "app/src/main/cpp/vortekrenderer/src/xwindow_swapchain.c"
-            "app/src/main/cpp/vortekrenderer/include/xwindow_swapchain.h"
-            "app/src/main/cpp/vortekrenderer/include/vk_context.h"
-            "app/src/main/cpp/vortekrenderer/src/vulkan_helper.c"
-            "app/src/main/cpp/vortekrenderer/src/request_handler.c"
-            "app/src/main/cpp/winlator/winfg/winfg_bridge.cpp"
-            "app/src/main/cpp/winlator/winfg/winfg_bridge.h"
-            # --- win-fg 运行时菜单 UI ---
-            "app/src/main/java/com/winlator/XServerDisplayActivity.java"
-            "app/src/main/java/com/winlator/xenvironment/components/VortekRendererComponent.java"
-            "app/src/main/res/menu/xserver_menu.xml"
-            # --- win-fg native 集成补丁（仓库根目录） ---
-            "winfg-native.patch"
           )
+
+          # 说明：以下文件刻意【不】保护，跟随上游或走 git 三方自动合并——
+          #   core/AppUtils.java、core/PatchUtils.java：与上游逐字节一致（运行时共存）
+          #   XServerDisplayActivity.java：仅多一行 mailbox 调优，与上游生命周期重构
+          #       位于不同区域，三方合并通常自动保留；锁死反而会漏掉上游前台服务修复
+          #   xenvironment/components/VortekRendererComponent.java：已回退上游
+          #       （Texture 竞态修复上游已收进 GPUImage.createOrObtain）
+          #   ContainerDetailFragment / 各 arrays.xml / xserver_menu.xml /
+          #       vortekrenderer/CMakeLists.txt：均已与上游一致
           # 整个目录保护（目录下所有文件冲突时都保留 ours）
           OURS_DIRS=(
             "docs"
@@ -248,7 +234,7 @@ jobs:
           此 PR 由定时工作流自动创建。
           
           ### 说明
-          - 上游更新已按【区域保护策略】合并：定制的共存/win-fg 文件保留我们的版本，其余采用上游新版
+          - 上游更新已按【区域保护策略】合并：共存/构建定制文件保留我们的版本，其余采用上游新版
           - 此 PR 会自动触发 build-coexist.yml 构建验证（见 Checks）
           - **构建绿色后再合并**；红色说明上游改动与定制有冲突，不要合并，等待修复补丁
           
@@ -258,7 +244,7 @@ jobs:
           \`\`\`
           
           ### 冲突处理
-          - 🛡 保留我们的版本（ours）：README、CHANGELOG、coexist.properties、build.gradle、AndroidManifest、AppUtils、WinHandler、win-fg 全部文件等
+          - 🛡 保留我们的版本（ours）：README、build.gradle、AndroidManifest、FileUtils、WinHandler、Container、EnvVarsView、MainApplication、gladiorenderer CMake 等
           - ⬆ 采用上游新版（theirs）：未被保护的文件
           - 合并后若需验证 APK，打 \`v*\` tag 触发发布（或直接安装 PR 构建产物）
           "
@@ -278,4 +264,4 @@ jobs:
 
       - name: 无更新时提示
         if: steps.check.outputs.up_to_date == 'true'
-        run: echo "上游与 win-fg 均已是最新，无需同步。如需强制同步，请在手动运行时勾选 force_sync。"
+        run: echo "上游已是最新，无需同步。如需强制同步，请在手动运行时勾选 force_sync。"
