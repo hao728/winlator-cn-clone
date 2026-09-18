@@ -264,10 +264,10 @@ public class MainApplication extends Application {
         boolean wineOk = installedWineDir.isDirectory();
         checkFile(writer, installedWineDir, "Wine 运行环境 (opt/installed-wine)", true);
         // box64/box86 二进制：rootfs/usr/bin/
-        File box64File = new File(rootfsDir, "usr/bin/box64");
+        File box64File = new File(rootfsDir, "usr/local/bin/box64");
         boolean box64Ok = box64File.isFile();
         checkFile(writer, box64File, "box64 (x86_64 转译器)", false);
-        File box86File = new File(rootfsDir, "usr/bin/box86");
+        File box86File = new File(rootfsDir, "usr/local/bin/box86");
         boolean box86Ok = box86File.isFile();
         checkFile(writer, box86File, "box86 (x86 转译器)", false);
         // 已安装 Wine 版本（rootfs/opt/installed-wine 下的子目录）
