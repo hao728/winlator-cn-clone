@@ -150,7 +150,7 @@ index 2c8d99c8..7862c7b4 100644
          sbBrightness.setValue(0);
          sbContrast.setValue(0);
 diff --git a/app/src/main/java/com/winlator/renderer/EffectComposer.java b/app/src/main/java/com/winlator/renderer/EffectComposer.java
-index 79ea768a..9ff0b2a9 100644
+index 79ea768a..4cc968df 100644
 --- a/app/src/main/java/com/winlator/renderer/EffectComposer.java
 +++ b/app/src/main/java/com/winlator/renderer/EffectComposer.java
 @@ -1,35 +1,87 @@
@@ -251,7 +251,7 @@ index 79ea768a..9ff0b2a9 100644
          }
          return null;
      }
-@@ -38,55 +90,276 @@ public class EffectComposer {
+@@ -38,55 +90,274 @@ public class EffectComposer {
          return !effects.isEmpty();
      }
  
@@ -432,8 +432,6 @@ index 79ea768a..9ff0b2a9 100644
 +        readBuffer = tmp;
 +    }
 +
-+        renderer.xServerView.requestRender();
-+    }
 +
 +    public synchronized void configureFrameGeneration(int initialFPS, int mode) {
 +        if (frameGenerationEffect != null) {
