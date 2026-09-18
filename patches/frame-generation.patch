@@ -2706,7 +2706,7 @@ index 6597d3e5..a0f2ea3f 100644
 \ No newline at end of file
 diff --git a/app/src/main/res/layout/frame_generation_layout.xml b/app/src/main/res/layout/frame_generation_layout.xml
 new file mode 100644
-index 00000000..8f4a4af0
+index 00000000..3ac73af0
 --- /dev/null
 +++ b/app/src/main/res/layout/frame_generation_layout.xml
 @@ -0,0 +1,249 @@
@@ -2714,7 +2714,7 @@ index 00000000..8f4a4af0
 +<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
 +    android:layout_width="wrap_content"
 +    android:layout_height="wrap_content"
-+    android:background="@drawable/content_dialog_background"
++    android:background="@drawable/content_dialog_background_dark"
 +    android:gravity="center"
 +    android:orientation="vertical"
 +    android:paddingTop="16dp"
@@ -3202,10 +3202,10 @@ index 6ffec6de..05669db5 100644
  </LinearLayout>
 \ No newline at end of file
 diff --git a/app/src/main/res/values/strings.xml b/app/src/main/res/values/strings.xml
-index 43ab9902..a2955964 100644
+index 43ab9902..b532b088 100644
 --- a/app/src/main/res/values/strings.xml
 +++ b/app/src/main/res/values/strings.xml
-@@ -568,4 +568,8 @@
+@@ -568,4 +568,17 @@
      <string name="fgs_notification_content_else">Winlator is running in the background</string>
      <string name="save_mem_on_run_from_steam">Save memory on run from Steam</string>
      <string name="present_mode">Present Mode</string>
@@ -3213,5 +3213,14 @@ index 43ab9902..a2955964 100644
 +    <string name="generation_mode" translatable="false">Mode:</string>
 +    <string name="fps_multiplier" translatable="false">Multiplier:</string>
 +    <string name="blend" translatable="false">Blending:</string>
++    <string name="on" translatable="false">ON</string>
++    <string name="off" translatable="false">OFF</string>
++    <string name="initial_fps" translatable="false">Init. FPS:</string>
++    <string name="api" translatable="false">API:</string>
++    <string name="post_processing" translatable="false">Post-processing:</string>
++    <string name="motion_scale" translatable="false">Motion force:</string>
++    <string name="fps_text" translatable="false">FPS:</string>
++    <string name="ram_text" translatable="false">RAM:</string>
++    <string name="battery_temperature_text" translatable="false">BAT:</string>
  </resources>
 \ No newline at end of file
