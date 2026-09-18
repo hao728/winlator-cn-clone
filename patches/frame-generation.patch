@@ -595,7 +595,7 @@ index c55071ec..02298c1c 100644
  }
 diff --git a/app/src/main/java/com/winlator/renderer/effects/FrameGenerationEffect.java b/app/src/main/java/com/winlator/renderer/effects/FrameGenerationEffect.java
 new file mode 100644
-index 00000000..37f93d32
+index 00000000..f566beba
 --- /dev/null
 +++ b/app/src/main/java/com/winlator/renderer/effects/FrameGenerationEffect.java
 @@ -0,0 +1,1345 @@
@@ -1579,7 +1579,7 @@ index 00000000..37f93d32
 +        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, srcTexture);
 +        GLES20.glUniform1i(lumaMaterial.getUniformLocation("screenTexture"), 0);
 +
-+        GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, renderer.quadVertices.count());
++        GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, renderer.getQuadVertices().count());
 +        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, 0);
 +
 +        GLES20.glEnable(GLES20.GL_BLEND);
@@ -1946,7 +1946,7 @@ index 00000000..37f93d32
 +}
 \ No newline at end of file
 diff --git a/app/src/main/java/com/winlator/renderer/material/ShaderMaterial.java b/app/src/main/java/com/winlator/renderer/material/ShaderMaterial.java
-index aecbd1ec..a61f7c48 100644
+index aecbd1ec..0fd66011 100644
 --- a/app/src/main/java/com/winlator/renderer/material/ShaderMaterial.java
 +++ b/app/src/main/java/com/winlator/renderer/material/ShaderMaterial.java
 @@ -69,6 +69,16 @@ public abstract class ShaderMaterial {
@@ -1966,6 +1966,22 @@ index aecbd1ec..a61f7c48 100644
      private int getUniformLocation(Uniform uniform) {
          if (uniform.location != -1) return uniform.location;
          int location = programId != 0 ? GLES20.glGetUniformLocation(programId, uniform.name) : -1;
+@@ -109,4 +119,15 @@ public abstract class ShaderMaterial {
+         int location = getUniformLocation(uniform);
+         if (location != -1) GLES20.glUniform2f(location, x, y);
+     }
++
++    // ===== 帧生成移植：字符串名重载（alexvorxx 用字符串名设置 uniform）=====
++    public void setUniformInt(String name, int value) {
++        int location = getUniformLocation(name);
++        if (location != -1) GLES20.glUniform1i(location, value);
++    }
++
++    public void setUniformVec2(String name, float x, float y) {
++        int location = getUniformLocation(name);
++        if (location != -1) GLES20.glUniform2f(location, x, y);
++    }
+ }
 diff --git a/app/src/main/java/com/winlator/widget/FrameGenerationView.java b/app/src/main/java/com/winlator/widget/FrameGenerationView.java
 new file mode 100644
 index 00000000..1f131ff1
