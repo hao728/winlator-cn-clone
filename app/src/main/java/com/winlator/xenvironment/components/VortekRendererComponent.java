@@ -107,6 +107,13 @@ public class VortekRendererComponent extends EnvironmentComponent implements Con
         return window != null ? window.getHeight() : 0;
     }
 
+    /**
+     * 获取窗口内容对应的硬件缓冲区指针，必要时创建 GPU 图像。
+     *
+     * @param windowId X11 窗口标识
+     * @param useHALPixelFormatBGRA8888 是否使用 HAL BGRA8888 像素格式
+     * @return 硬件缓冲区指针；窗口不存在时返回 {@code 0}
+     */
     @Keep
     private long getWindowHardwareBuffer(int windowId, boolean useHALPixelFormatBGRA8888) {
         Window window = xServer.windowManager.getWindow(windowId);

@@ -142,6 +142,11 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
     private Win32AppWorkarounds win32AppWorkarounds;
     private String screenEffectProfile;
 
+    /**
+     * 创建显示会话并初始化容器运行所需的界面与服务状态。
+     *
+     * @param savedInstanceState 先前保存的 Activity 状态
+     */
     @Override
     public void onCreate(Bundle savedInstanceState) {
         AppUtils.setActivityTheme(this);
@@ -334,6 +339,9 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
         }
     }
 
+    /**
+     * 恢复显示环境，并通知前台服务当前会话已进入前台。
+     */
     @Override
     public void onResume() {
         super.onResume();
@@ -348,6 +356,9 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
         ForegroundService.onResumeSession(this);
     }
 
+    /**
+     * 暂停显示环境，并通知前台服务当前会话已离开前台。
+     */
     @Override
     public void onPause() {
         ForegroundService.onPauseSession(this);
@@ -358,12 +369,21 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
         }
     }
 
+    /**
+     * 同步画中画模式与前台服务的会话状态。
+     *
+     * @param isInPictureInPictureMode 当前是否处于画中画模式
+     * @param newConfig 模式切换后的设备配置
+     */
     @Override
     public void onPictureInPictureModeChanged(boolean isInPictureInPictureMode, Configuration newConfig) {
         super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig);
         ForegroundService.setPipMode(isInPictureInPictureMode);
     }
 
+    /**
+     * 销毁显示环境并结束对应的前台服务会话。
+     */
     @Override
     protected void onDestroy() {
         winHandler.stop();
@@ -483,6 +503,9 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
         }
     }
 
+    /**
+     * 停止当前容器环境、重启应用并结束前台服务会话。
+     */
     private void exit() {
         winHandler.stop();
         if (environment != null) environment.stopEnvironmentComponents();
@@ -815,6 +838,9 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
         inputControlsView.invalidate();
     }
 
+    /**
+     * 准备所选图形驱动文件，并配置驱动对应的环境变量。
+     */
     private void extractGraphicsDriverFiles() {
         envVars.put("vblank_mode", "0");
 
