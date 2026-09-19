@@ -2198,7 +2198,7 @@ index 0000000..eca5d4f
 \ No newline at end of file
 diff --git a/app/src/main/res/layout/frame_generation_layout.xml b/app/src/main/res/layout/frame_generation_layout.xml
 new file mode 100644
-index 0000000..8f4a4af
+index 0000000..0cb5348
 --- /dev/null
 +++ b/app/src/main/res/layout/frame_generation_layout.xml
 @@ -0,0 +1,249 @@
@@ -2206,7 +2206,7 @@ index 0000000..8f4a4af
 +<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
 +    android:layout_width="wrap_content"
 +    android:layout_height="wrap_content"
-+    android:background="@drawable/content_dialog_background"
++    android:background="@drawable/content_dialog_background_light"
 +    android:gravity="center"
 +    android:orientation="vertical"
 +    android:paddingTop="16dp"
