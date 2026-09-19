@@ -1,3 +1,16 @@
+diff --git a/.github/workflows/build-coexist.yml b/.github/workflows/build-coexist.yml
+index 0dfdc3c..263751b 100644
+--- a/.github/workflows/build-coexist.yml
++++ b/.github/workflows/build-coexist.yml
+@@ -228,7 +228,7 @@ jobs:
+             -Pandroid.injected.signing.key.password=${{ steps.keystore.outputs.key_pass }} > build.log 2>&1
+           GRADLE_EXIT=$?
+           echo "Gradle 退出码: $GRADLE_EXIT"
+-          grep -nE "^e: |error:|FAILED|FAILURE:|What went wrong|> Task .*FAILED|Caused by:|Execution failed|ninja: error|clang.*error" build.log | head -40 | while IFS= read -r line; do
++          grep -nE "^e: |error:|FAILED|FAILURE:|What went wrong|> Task .*FAILED|Caused by:|Execution failed|ninja: error|clang.*error|symbol:|location:" build.log | head -60 | while IFS= read -r line; do
+             echo "::error::$line"
+           done
+           echo "========== 最后 80 行 =========="
 diff --git a/app/src/main/cpp/winlator/CMakeLists.txt b/app/src/main/cpp/winlator/CMakeLists.txt
 index 78326bf..cf12e2a 100644
 --- a/app/src/main/cpp/winlator/CMakeLists.txt
