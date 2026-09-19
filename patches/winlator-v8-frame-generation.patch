@@ -12,9 +12,18 @@ index 0dfdc3c..e0ba1a5 100644
            done
            echo "========== 最后 80 行 =========="
 diff --git a/.github/workflows/sync-upstream.yml b/.github/workflows/sync-upstream.yml
-index c5390ad..3394140 100644
+index c5390ad..ebabebb 100644
 --- a/.github/workflows/sync-upstream.yml
 +++ b/.github/workflows/sync-upstream.yml
+@@ -50,7 +50,7 @@ jobs:
+         run: |
+           git config user.name "github-actions[bot]"
+           git config user.email "github-actions[bot]@users.noreply.github.com"
+-          git remote set-url origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
++          git remote set-url origin "https://x-access-token:${{ secrets.PAT_TOKEN }}@github.com/${GITHUB_REPOSITORY}.git"
+ 
+       - name: 添加上游并拉取
+         run: |
 @@ -86,11 +86,14 @@ jobs:
          if: steps.check.outputs.up_to_date == 'false'
          run: |
@@ -32,6 +41,15 @@ index c5390ad..3394140 100644
            git checkout -B "$BRANCH" origin/main
  
            OURS_FILES=(
+@@ -222,7 +225,7 @@ jobs:
+       - name: 创建/更新 PR 到 main
+         if: steps.check.outputs.up_to_date == 'false' && steps.merge.outputs.has_changes == 'true'
+         env:
+-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
++          GH_TOKEN: ${{ secrets.PAT_TOKEN }}
+         run: |
+           BRANCH="${{ steps.merge.outputs.sync_branch }}"
+           COMMIT="${{ steps.merge.outputs.sync_commit }}"
 diff --git a/app/src/main/cpp/winlator/CMakeLists.txt b/app/src/main/cpp/winlator/CMakeLists.txt
 index 78326bf..cf12e2a 100644
 --- a/app/src/main/cpp/winlator/CMakeLists.txt
@@ -99,7 +117,7 @@ index 0000000..45025c3
 +}
 \ No newline at end of file
 diff --git a/app/src/main/java/com/winlator/XServerDisplayActivity.java b/app/src/main/java/com/winlator/XServerDisplayActivity.java
-index f262514..b385f65 100644
+index f262514..0a661e7 100644
 --- a/app/src/main/java/com/winlator/XServerDisplayActivity.java
 +++ b/app/src/main/java/com/winlator/XServerDisplayActivity.java
 @@ -69,7 +69,9 @@ import com.winlator.inputcontrols.ExternalController;
@@ -120,7 +138,7 @@ index f262514..b385f65 100644
      private Container container;
      private XServer xServer;
      private InputControlsManager inputControlsManager;
-@@ -452,6 +455,35 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
+@@ -452,6 +455,36 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
                  (new ScreenEffectDialog(this)).show();
                  drawerLayout.closeDrawers();
                  break;
@@ -144,6 +162,7 @@ index f262514..b385f65 100644
 +                            }
 +                        } else if (effect != null) {
 +                            effect.toggleGeneration();
++                            glRenderer.effectComposer.removeEffect(effect);
 +                        }
 +                    });
 +                    frameGenerationView.setHideButtonCallback(() -> frameGenerationView.setVisibility(View.GONE));
@@ -157,7 +176,7 @@ index f262514..b385f65 100644
                  PictureInPictureParams pipParams = (new PictureInPictureParams.Builder())
                      .setAspectRatio(screenInfo.aspectRatio())
 diff --git a/app/src/main/java/com/winlator/renderer/EffectComposer.java b/app/src/main/java/com/winlator/renderer/EffectComposer.java
-index 79ea768..bbafe58 100644
+index 79ea768..9d9500c 100644
 --- a/app/src/main/java/com/winlator/renderer/EffectComposer.java
 +++ b/app/src/main/java/com/winlator/renderer/EffectComposer.java
 @@ -1,29 +1,54 @@
@@ -280,7 +299,7 @@ index 79ea768..bbafe58 100644
 +            boolean renderToScreen = (i == effects.size() - 1);
 +            int targetFramebuffer = renderToScreen ? 0 : writeBuffer.getFramebuffer();
 +
-+            if (effect == frameGenerationEffect && frameGenerationEffect != null) {
++            if (effect == frameGenerationEffect && frameGenerationEffect != null && frameGenerationEffect.isEnabled()) {
 +                // 帧生成：先在 readBuffer 上做准备（运动估计/历史帧），再输出到目标
 +                GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, readBuffer.getFramebuffer());
 +                GLES20.glViewport(0, 0, renderer.surfaceWidth, renderer.surfaceHeight);
