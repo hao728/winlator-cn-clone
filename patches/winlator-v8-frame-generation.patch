@@ -1,5 +1,5 @@
 diff --git a/.github/workflows/build-coexist.yml b/.github/workflows/build-coexist.yml
-index 0dfdc3c..263751b 100644
+index 0dfdc3c..e0ba1a5 100644
 --- a/.github/workflows/build-coexist.yml
 +++ b/.github/workflows/build-coexist.yml
 @@ -228,7 +228,7 @@ jobs:
@@ -7,10 +7,31 @@ index 0dfdc3c..263751b 100644
            GRADLE_EXIT=$?
            echo "Gradle 退出码: $GRADLE_EXIT"
 -          grep -nE "^e: |error:|FAILED|FAILURE:|What went wrong|> Task .*FAILED|Caused by:|Execution failed|ninja: error|clang.*error" build.log | head -40 | while IFS= read -r line; do
-+          grep -nE "^e: |error:|FAILED|FAILURE:|What went wrong|> Task .*FAILED|Caused by:|Execution failed|ninja: error|clang.*error|symbol:|location:" build.log | head -60 | while IFS= read -r line; do
++          grep -nE -A3 "^e: |error:" build.log | head -120 | while IFS= read -r line; do
              echo "::error::$line"
            done
            echo "========== 最后 80 行 =========="
+diff --git a/.github/workflows/sync-upstream.yml b/.github/workflows/sync-upstream.yml
+index c5390ad..3394140 100644
+--- a/.github/workflows/sync-upstream.yml
++++ b/.github/workflows/sync-upstream.yml
+@@ -86,11 +86,14 @@ jobs:
+         if: steps.check.outputs.up_to_date == 'false'
+         run: |
+           UPSTREAM_SHORT=$(git rev-parse --short=8 upstream/${UPSTREAM_BRANCH})
+-          BRANCH="auto-sync-${UPSTREAM_SHORT}"
++          # 固定分支名：永远维护一个 auto-sync 分支 + 一个 PR
++          # 每天从 origin/main 重新 checkout，merge 全部上游提交
++          # 这样 PR 里自动累积所有未合并的上游提交，不用一个一个点
++          BRANCH="auto-sync"
+           echo "sync_branch=$BRANCH" >> $GITHUB_OUTPUT
+           echo "sync_commit=$UPSTREAM_SHORT" >> $GITHUB_OUTPUT
+ 
+-          # 从最新 main 强制重置分支（可重复运行：已有同名分支则重置）
++          # 从最新 main 强制重置分支（每天重建，保证只含 main + 上游新提交）
+           git checkout -B "$BRANCH" origin/main
+ 
+           OURS_FILES=(
 diff --git a/app/src/main/cpp/winlator/CMakeLists.txt b/app/src/main/cpp/winlator/CMakeLists.txt
 index 78326bf..cf12e2a 100644
 --- a/app/src/main/cpp/winlator/CMakeLists.txt
