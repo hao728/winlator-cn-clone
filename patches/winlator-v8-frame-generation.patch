@@ -308,13 +308,15 @@ index 79ea768..9faef99 100644
 \ No newline at end of file
 +}
 diff --git a/app/src/main/java/com/winlator/renderer/GLRenderer.java b/app/src/main/java/com/winlator/renderer/GLRenderer.java
-index c55071e..4fae723 100644
+index c55071e..912312e 100644
 --- a/app/src/main/java/com/winlator/renderer/GLRenderer.java
 +++ b/app/src/main/java/com/winlator/renderer/GLRenderer.java
-@@ -43,6 +43,13 @@ public class GLRenderer implements GLSurfaceView.Renderer, WindowManager.OnWindo
+@@ -42,7 +42,14 @@ import javax.microedition.khronos.opengles.GL10;
+ public class GLRenderer implements GLSurfaceView.Renderer, WindowManager.OnWindowModificationListener, Pointer.OnPointerMotionListener {
      public final XServerView xServerView;
      private final XServer xServer;
-     protected final VertexAttribute quadVertices = new VertexAttribute("position", 2);
+-    protected final VertexAttribute quadVertices = new VertexAttribute("position", 2);
++    public final VertexAttribute quadVertices = new VertexAttribute("position", 2);
 +    // 帧生成桥接：供 renderer.effects 包访问（FrameGenerationEffect 依赖）
 +    public VertexAttribute getQuadVertices() {
 +        return quadVertices;
