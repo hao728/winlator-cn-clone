@@ -65,7 +65,7 @@ index 0000000..45025c3
 +}
 \ No newline at end of file
 diff --git a/app/src/main/java/com/winlator/XServerDisplayActivity.java b/app/src/main/java/com/winlator/XServerDisplayActivity.java
-index f262514..c37573c 100644
+index f262514..b385f65 100644
 --- a/app/src/main/java/com/winlator/XServerDisplayActivity.java
 +++ b/app/src/main/java/com/winlator/XServerDisplayActivity.java
 @@ -69,7 +69,9 @@ import com.winlator.inputcontrols.ExternalController;
@@ -92,18 +92,18 @@ index f262514..c37573c 100644
                  break;
 +            case R.id.menu_item_frame_generation: {
 +                // 帧生成：直接弹出悬浮控件，不进屏幕滤镜对话框
-+                final GLRenderer renderer = xServerView.getRenderer();
++                final GLRenderer glRenderer = xServerView.getRenderer();
 +                final FrameLayout container = findViewById(R.id.FLXServerDisplay);
 +                if (frameGenerationView == null) {
-+                    frameGenerationView = new FrameGenerationView(this, renderer);
++                    frameGenerationView = new FrameGenerationView(this, glRenderer);
 +                    frameGenerationView.setFrameGenerationCallback((value) -> {
-+                        FrameGenerationEffect effect = (FrameGenerationEffect) renderer.effectComposer.getEffect(FrameGenerationEffect.class);
++                        FrameGenerationEffect effect = (FrameGenerationEffect) glRenderer.effectComposer.getEffect(FrameGenerationEffect.class);
 +                        if (value) {
 +                            if (effect == null) {
-+                                effect = new FrameGenerationEffect(renderer, FrameGenerationEffect.GENERATION_MODE_BALANCED,
++                                effect = new FrameGenerationEffect(glRenderer, FrameGenerationEffect.GENERATION_MODE_BALANCED,
 +                                        FrameGenerationEffect.FPS_MULTIPLIER_X2, FrameGenerationEffect.API_QUALCOMM,
 +                                        false, true, FrameGenerationEffect.DEFAULT_MOTION_SCALE);
-+                                renderer.effectComposer.addEffect(effect);
++                                glRenderer.effectComposer.addEffect(effect);
 +                                effect.toggleGeneration();
 +                            } else {
 +                                effect.toggleGeneration();
@@ -123,7 +123,7 @@ index f262514..c37573c 100644
                  PictureInPictureParams pipParams = (new PictureInPictureParams.Builder())
                      .setAspectRatio(screenInfo.aspectRatio())
 diff --git a/app/src/main/java/com/winlator/renderer/EffectComposer.java b/app/src/main/java/com/winlator/renderer/EffectComposer.java
-index 79ea768..9faef99 100644
+index 79ea768..15e9696 100644
 --- a/app/src/main/java/com/winlator/renderer/EffectComposer.java
 +++ b/app/src/main/java/com/winlator/renderer/EffectComposer.java
 @@ -1,29 +1,51 @@
@@ -179,7 +179,7 @@ index 79ea768..9faef99 100644
          renderer.xServerView.requestRender();
      }
  
-@@ -45,16 +67,17 @@ public class EffectComposer {
+@@ -45,16 +67,18 @@ public class EffectComposer {
      }
  
      private void renderEffect(Effect effect) {
@@ -189,10 +189,11 @@ index 79ea768..9faef99 100644
          material.use();
 +        // 普通滤镜需要绑定当前纹理；帧生成由 setupShaderUniforms 自行绑定多纹理
 +        if (!(effect instanceof FrameGenerationEffect)) {
-+            material.setUniformVec2(material.uniforms.resolution, renderer.surfaceWidth, renderer.surfaceHeight);
++            ScreenMaterial sm = (ScreenMaterial) material;
++            material.setUniformVec2(sm.uniforms.resolution, renderer.surfaceWidth, renderer.surfaceHeight);
 +            GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
 +            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, readBuffer.getTextureId());
-+            material.setUniformInt(material.uniforms.screenTexture, 0);
++            material.setUniformInt(sm.uniforms.screenTexture, 0);
 +        }
          renderer.quadVertices.bind(material.programId);
 -
@@ -205,7 +206,7 @@ index 79ea768..9faef99 100644
          GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, renderer.quadVertices.count());
          GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, 0);
      }
-@@ -64,29 +87,90 @@ public class EffectComposer {
+@@ -64,29 +88,90 @@ public class EffectComposer {
              readBuffer = new RenderTarget();
              readBuffer.allocateFramebuffer(renderer.surfaceWidth, renderer.surfaceHeight);
          }
@@ -327,9 +328,33 @@ index c55071e..912312e 100644
      private final float[] tmpXForm1 = XForm.getInstance();
      private final float[] tmpXForm2 = XForm.getInstance();
      private final CursorMaterial cursorMaterial = new CursorMaterial();
+diff --git a/app/src/main/java/com/winlator/renderer/effects/Effect.java b/app/src/main/java/com/winlator/renderer/effects/Effect.java
+index 1a914f3..fc51f0a 100644
+--- a/app/src/main/java/com/winlator/renderer/effects/Effect.java
++++ b/app/src/main/java/com/winlator/renderer/effects/Effect.java
+@@ -1,15 +1,15 @@
+ package com.winlator.renderer.effects;
+ 
+-import com.winlator.renderer.material.ScreenMaterial;
++import com.winlator.renderer.material.ShaderMaterial;
+ 
+ public abstract class Effect {
+-    private ScreenMaterial material;
++    private ShaderMaterial material;
+ 
+-    protected ScreenMaterial createMaterial() {
++    protected ShaderMaterial createMaterial() {
+         return null;
+     }
+ 
+-    public ScreenMaterial getMaterial() {
++    public ShaderMaterial getMaterial() {
+         if (material == null) material = createMaterial();
+         return material;
+     }
 diff --git a/app/src/main/java/com/winlator/renderer/effects/FrameGenerationEffect.java b/app/src/main/java/com/winlator/renderer/effects/FrameGenerationEffect.java
 new file mode 100644
-index 0000000..36681ed
+index 0000000..ef546bb
 --- /dev/null
 +++ b/app/src/main/java/com/winlator/renderer/effects/FrameGenerationEffect.java
 @@ -0,0 +1,1343 @@
@@ -931,9 +956,9 @@ index 0000000..36681ed
 +
 +    public void setupShaderUniforms() {
 +        ShaderMaterial material = getMaterial();
-+        if (material == null || material.getProgram() == 0) return;
++        if (material == null || material.programId == 0) return;
 +
-+        int program = material.getProgram();
++        int program = material.programId;
 +
 +        // Initialize uniform locations
 +        if (uIsEnabledLoc == -1) {
