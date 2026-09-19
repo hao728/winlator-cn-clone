@@ -1,5 +1,18 @@
+diff --git a/.github/workflows/build-coexist.yml b/.github/workflows/build-coexist.yml
+index 0dfdc3c..263751b 100644
+--- a/.github/workflows/build-coexist.yml
++++ b/.github/workflows/build-coexist.yml
+@@ -228,7 +228,7 @@ jobs:
+             -Pandroid.injected.signing.key.password=${{ steps.keystore.outputs.key_pass }} > build.log 2>&1
+           GRADLE_EXIT=$?
+           echo "Gradle 退出码: $GRADLE_EXIT"
+-          grep -nE "^e: |error:|FAILED|FAILURE:|What went wrong|> Task .*FAILED|Caused by:|Execution failed|ninja: error|clang.*error" build.log | head -40 | while IFS= read -r line; do
++          grep -nE "^e: |error:|FAILED|FAILURE:|What went wrong|> Task .*FAILED|Caused by:|Execution failed|ninja: error|clang.*error|symbol:|location:" build.log | head -60 | while IFS= read -r line; do
+             echo "::error::$line"
+           done
+           echo "========== 最后 80 行 =========="
 diff --git a/app/src/main/cpp/winlator/CMakeLists.txt b/app/src/main/cpp/winlator/CMakeLists.txt
-index 78326bfa..cf12e2a7 100644
+index 78326bf..cf12e2a 100644
 --- a/app/src/main/cpp/winlator/CMakeLists.txt
 +++ b/app/src/main/cpp/winlator/CMakeLists.txt
 @@ -17,7 +17,8 @@ add_library(winlator SHARED
@@ -14,16 +27,10 @@ index 78326bfa..cf12e2a7 100644
                        log
 diff --git a/app/src/main/cpp/winlator/src/qcom.cpp b/app/src/main/cpp/winlator/src/qcom.cpp
 new file mode 100644
-index 00000000..c26f7128
+index 0000000..45025c3
 --- /dev/null
 +++ b/app/src/main/cpp/winlator/src/qcom.cpp
-@@ -0,0 +1,51 @@
-+/*
-+ * Ported from alexvorxx/winlator (MIT License)
-+ * Copyright (c) 2023 BrunoSX
-+ * MIT License: https://github.com/alexvorxx/winlator/blob/main/LICENSE
-+ */
-+
+@@ -0,0 +1,45 @@
 +#include <jni.h>
 +#include <GLES2/gl2.h>
 +#include <GLES2/gl2ext.h>
@@ -71,108 +78,71 @@ index 00000000..c26f7128
 +}
 \ No newline at end of file
 diff --git a/app/src/main/java/com/winlator/XServerDisplayActivity.java b/app/src/main/java/com/winlator/XServerDisplayActivity.java
-index f262514f..bcb57c1c 100644
+index f262514..b385f65 100644
 --- a/app/src/main/java/com/winlator/XServerDisplayActivity.java
 +++ b/app/src/main/java/com/winlator/XServerDisplayActivity.java
-@@ -74,6 +74,7 @@ import com.winlator.widget.FrameRating;
+@@ -69,7 +69,9 @@ import com.winlator.inputcontrols.ExternalController;
+ import com.winlator.inputcontrols.InputControlsManager;
+ import com.winlator.math.Mathf;
+ import com.winlator.renderer.GLRenderer;
++import com.winlator.renderer.effects.FrameGenerationEffect;
+ import com.winlator.services.ForegroundService;
++import com.winlator.widget.FrameGenerationView;
+ import com.winlator.widget.FrameRating;
  import com.winlator.widget.InputControlsView;
  import com.winlator.widget.MagnifierView;
- import com.winlator.widget.TouchpadView;
-+import com.winlator.widget.FrameGenerationView;
- import com.winlator.widget.XServerView;
- import com.winlator.winhandler.GamepadHandler;
- import com.winlator.winhandler.TaskManagerDialog;
-@@ -109,6 +110,7 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
-     private XServerView xServerView;
-     private InputControlsView inputControlsView;
+@@ -111,6 +113,7 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
      private TouchpadView touchpadView;
-+    public FrameGenerationView frameGenerationView;
      private XEnvironment environment;
      private DrawerLayout drawerLayout;
++    private FrameGenerationView frameGenerationView;
      private Container container;
-@@ -697,6 +699,7 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
-         if (container != null && container.getHUDMode() != FrameRating.Mode.DISABLED.ordinal()) {
-             frameRating = new FrameRating(this);
-             frameRating.setMode(FrameRating.Mode.values()[container.getHUDMode()]);
-+            frameRating.setRenderer(xServerView.getRenderer());
-             frameRating.setVisibility(View.GONE);
-             rootView.addView(frameRating);
-         }
-diff --git a/app/src/main/java/com/winlator/contentdialog/ScreenEffectDialog.java b/app/src/main/java/com/winlator/contentdialog/ScreenEffectDialog.java
-index 2c8d99c8..7862c7b4 100644
---- a/app/src/main/java/com/winlator/contentdialog/ScreenEffectDialog.java
-+++ b/app/src/main/java/com/winlator/contentdialog/ScreenEffectDialog.java
-@@ -23,6 +23,8 @@ import com.winlator.renderer.GLRenderer;
- import com.winlator.renderer.effects.CRTEffect;
- import com.winlator.renderer.effects.ColorEffect;
- import com.winlator.renderer.effects.FXAAEffect;
-+import com.winlator.renderer.effects.FrameGenerationEffect;
-+import com.winlator.widget.FrameGenerationView;
- import com.winlator.widget.SeekBar;
- 
- import java.util.ArrayList;
-@@ -111,6 +113,8 @@ public class ScreenEffectDialog extends ContentDialog {
-             else AppUtils.showToast(activity, R.string.no_profile_selected);
-         });
- 
-+        findViewById(R.id.BTFrameGeneration).setOnClickListener((v) -> addFrameGenerationView());
-+
-         setOnConfirmCallback(() -> {
-             float brightness = sbBrightness.getValue();
-             float contrast = sbContrast.getValue();
-@@ -143,6 +147,36 @@ public class ScreenEffectDialog extends ContentDialog {
-         resetButton.setOnClickListener((v) -> resetSettings());
-     }
- 
-+    private void addFrameGenerationView() {
-+        if (activity.frameGenerationView == null) {
-+            GLRenderer currentRenderer = activity.getXServerView().getRenderer();
-+            final FrameLayout container = activity.findViewById(R.id.FLXServerDisplay);
-+            activity.frameGenerationView = new FrameGenerationView(activity, currentRenderer);
-+            activity.frameGenerationView.setFrameGenerationCallback((value) -> {
-+                FrameGenerationEffect fge = (FrameGenerationEffect) currentRenderer.effectComposer.getEffect(FrameGenerationEffect.class);
-+                if (value) {
-+                    if (fge == null) {
-+                        fge = new FrameGenerationEffect(currentRenderer,
-+                                FrameGenerationEffect.GENERATION_MODE_BALANCED,
-+                                FrameGenerationEffect.FPS_MULTIPLIER_X2,
-+                                FrameGenerationEffect.API_QUALCOMM,
-+                                false, true, 0.5f);
-+                        currentRenderer.effectComposer.addEffect(fge);
-+                    }
-+                    fge.toggleGeneration();
-+                } else if (fge != null) {
-+                    fge.toggleGeneration();
-+                    currentRenderer.effectComposer.removeEffect(fge);
+     private XServer xServer;
+     private InputControlsManager inputControlsManager;
+@@ -452,6 +455,35 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
+                 (new ScreenEffectDialog(this)).show();
+                 drawerLayout.closeDrawers();
+                 break;
++            case R.id.menu_item_frame_generation: {
++                // 帧生成：直接弹出悬浮控件，不进屏幕滤镜对话框
++                final GLRenderer glRenderer = xServerView.getRenderer();
++                final FrameLayout container = findViewById(R.id.FLXServerDisplay);
++                if (frameGenerationView == null) {
++                    frameGenerationView = new FrameGenerationView(this, glRenderer);
++                    frameGenerationView.setFrameGenerationCallback((value) -> {
++                        FrameGenerationEffect effect = (FrameGenerationEffect) glRenderer.effectComposer.getEffect(FrameGenerationEffect.class);
++                        if (value) {
++                            if (effect == null) {
++                                effect = new FrameGenerationEffect(glRenderer, FrameGenerationEffect.GENERATION_MODE_BALANCED,
++                                        FrameGenerationEffect.FPS_MULTIPLIER_X2, FrameGenerationEffect.API_QUALCOMM,
++                                        false, true, FrameGenerationEffect.DEFAULT_MOTION_SCALE);
++                                glRenderer.effectComposer.addEffect(effect);
++                                effect.toggleGeneration();
++                            } else {
++                                effect.toggleGeneration();
++                            }
++                        } else if (effect != null) {
++                            effect.toggleGeneration();
++                        }
++                    });
++                    frameGenerationView.setHideButtonCallback(() -> frameGenerationView.setVisibility(View.GONE));
++                    container.addView(frameGenerationView);
 +                }
-+            });
-+            activity.frameGenerationView.setHideButtonCallback(() -> activity.frameGenerationView.setVisibility(View.GONE));
-+            container.addView(activity.frameGenerationView);
-+        } else {
-+            activity.frameGenerationView.setVisibility(View.VISIBLE);
-+        }
-+        dismiss();
-+    }
-+
-     private void resetSettings() {
-         sbBrightness.setValue(0);
-         sbContrast.setValue(0);
++                frameGenerationView.setVisibility(View.VISIBLE);
++                drawerLayout.closeDrawers();
++                break;
++            }
+             case R.id.menu_item_pip_mode:
+                 PictureInPictureParams pipParams = (new PictureInPictureParams.Builder())
+                     .setAspectRatio(screenInfo.aspectRatio())
 diff --git a/app/src/main/java/com/winlator/renderer/EffectComposer.java b/app/src/main/java/com/winlator/renderer/EffectComposer.java
-index 79ea768a..31f803c1 100644
+index 79ea768..bbafe58 100644
 --- a/app/src/main/java/com/winlator/renderer/EffectComposer.java
 +++ b/app/src/main/java/com/winlator/renderer/EffectComposer.java
-@@ -1,35 +1,87 @@
-+/*
-+ * Ported from alexvorxx/winlator (MIT License)
-+ * Copyright (c) 2023 BrunoSX
-+ * MIT License: https://github.com/alexvorxx/winlator/blob/main/LICENSE
-+ * Modified: removed ToonEffect dependency (not present in this fork)
-+ */
-+
+@@ -1,29 +1,54 @@
  package com.winlator.renderer;
  
  import android.opengl.GLES20;
-+import android.os.SystemClock;
 +import android.util.Log;
  
  import com.winlator.renderer.effects.Effect;
@@ -181,431 +151,229 @@ index 79ea768a..31f803c1 100644
 +import com.winlator.renderer.material.ShaderMaterial;
  
  import java.util.ArrayList;
-+import java.util.List;
  
++/**
++ * 特效合成器
++ * 在原有滤镜管线（亮度/CRT/FXAA）基础上，加入帧生成（Frame Generation）逐帧调度。
++ * 帧生成作为特殊 effect：负责在原帧/插帧之间按目标帧率合成中间帧。
++ */
  public class EffectComposer {
-+    // Constants
 +    private static final String TAG = "EffectComposer";
-+    private boolean isRendering = false;
 +
-+    // Instance fields
-+    private final List<Effect> effects = new ArrayList<>();
-+    private RenderTarget readBuffer;
-+    private RenderTarget writeBuffer;
-     private final GLRenderer renderer;
--    private RenderTarget readBuffer = null;
--    private RenderTarget writeBuffer = null;
--    private final ArrayList<Effect> effects = new ArrayList<>();
- 
-+    private FrameGenerationEffect frameGenerationEffect;
-+
++    /** 帧生成调试日志总开关（FrameGenerationEffect.LogString 会读它） */
 +    public static final boolean logEnabled = false;
 +
-+    private long lastTime = 0;
-+    private int frameCount = 0;
-+    private long lastFPS = 0;
+     private final GLRenderer renderer;
+     private RenderTarget readBuffer = null;
+     private RenderTarget writeBuffer = null;
+     private final ArrayList<Effect> effects = new ArrayList<>();
+ 
++    // 帧生成专用实例
++    private FrameGenerationEffect frameGenerationEffect;
 +
-+    private ResolveMaterial resolveMaterial;
-+    private boolean antiArtefactsFixNeeded = false;
-+
-+    private void LogString(String message) {
-+        if (logEnabled)
-+            Log.d(TAG, message);
-+    }
-+
-+    // Constructor
      public EffectComposer(GLRenderer renderer) {
          this.renderer = renderer;
      }
  
--    public synchronized void addEffect(Effect effect) {
+     public synchronized void addEffect(Effect effect) {
 -        if (!effects.contains(effect)) effects.add(effect);
--        renderer.xServerView.requestRender();
-+    // Initializes the buffers if they are not already initialized
-+    private void initBuffers() {
-+        if (readBuffer == null) {
-+            readBuffer = new RenderTarget();
-+            readBuffer.allocateFramebuffer(renderer.surfaceWidth, renderer.surfaceHeight);
-+        }
-+
-+        if (writeBuffer == null) {
-+            writeBuffer = new RenderTarget();
-+            writeBuffer.allocateFramebuffer(renderer.surfaceWidth, renderer.surfaceHeight);
-+        }
-     }
- 
--    public synchronized void removeEffect(Effect effect) {
--        effects.remove(effect);
-+    public synchronized void addEffect(Effect effect) {
-+        if ((frameGenerationEffect != null) && !(effect instanceof FrameGenerationEffect))
-+            return;
-+        if (!effects.contains(effect)) {
-+            effects.add(effect);
-+            if (effect instanceof FrameGenerationEffect) {
++        // 帧生成只能有一个实例；若已存在，忽略其他
++        if (effect instanceof FrameGenerationEffect) {
++            if (frameGenerationEffect == null) {
 +                frameGenerationEffect = (FrameGenerationEffect) effect;
-+                Log.d(TAG, "FrameGenerationEffect added");
++                effects.add(effect);
 +            }
++        } else {
++            if (!effects.contains(effect)) effects.add(effect);
 +        }
          renderer.xServerView.requestRender();
      }
  
--    public synchronized  <T extends Effect> T getEffect(Class<T> effectClass) {
-+    public synchronized <T extends Effect> T getEffect(Class<T> effectClass) {
-         for (Effect effect : effects) {
--            if (effect.getClass() == effectClass) return (T)effect;
-+            if (effect.getClass() == effectClass) {
-+                return effectClass.cast(effect);
-+            }
-         }
-         return null;
-     }
-@@ -38,55 +90,275 @@ public class EffectComposer {
-         return !effects.isEmpty();
+     public synchronized void removeEffect(Effect effect) {
+         effects.remove(effect);
++        if (effect == frameGenerationEffect) frameGenerationEffect = null;
+         renderer.xServerView.requestRender();
      }
  
--    private void swapBuffers() {
--        RenderTarget tmp = writeBuffer;
--        writeBuffer = readBuffer;
--        readBuffer = tmp;
-+    public synchronized void removeEffect(Effect effect) {
-+        if (effects.remove(effect)) {
-+            if (effect == frameGenerationEffect) {
-+                frameGenerationEffect = null;
-+            }
-+        }
-+        renderer.xServerView.requestRender();
+@@ -45,16 +70,18 @@ public class EffectComposer {
      }
  
-+    private int determineFrameSequence() {
-+        if (frameGenerationEffect != null && frameGenerationEffect.isEnabled()) {
-+            // Frame type
-+            int frameType = frameGenerationEffect.getFrameToDisplay();
-+
-+            if (frameType == 1 && !frameGenerationEffect.isReadyForGeneration()) {
-+                LogString("Generation not ready yet, showing real frame instead");
-+                return 0;
-+            }
-+
-+            //LogString("Frame sequence determined: " + frameType);
-+            return frameType;
-+        } else {
-+            return 0;
-+        }
-+    }
-+
-+    // Renders all the effects in the composer
-+    public synchronized void render() {
-+        if (isRendering) {
-+            //LogString("Already rendering, skipping");
-+            return;
-+        }
-+
-+        isRendering = true;
-+
-+        try {
-+            initBuffers();
-+
-+            int currentSequence = determineFrameSequence();
-+            //LogString("Current sequence: " + currentSequence);
-+
-+            // Set up framebuffer
-+            if (hasEffects()) {
-+                GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, readBuffer.getFramebuffer());
-+            } else {
-+                GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0);
-+            }
-+
-+            // Clear
-+            GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT);
-+
-+            // Draw the initial frame
-+            renderer.drawFrame();
-+
-+            // Resolve-pass: force texture read and write clean copy in writeBuffer → swap → readBuffer
-+            if (antiArtefactsFixNeeded && hasEffects() && effects.size() > 0) {
-+                if (resolveMaterial == null) {
-+                    resolveMaterial = new ResolveMaterial();
-+                }
-+                GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, writeBuffer.getFramebuffer());
-+                GLES20.glViewport(0, 0, renderer.surfaceWidth, renderer.surfaceHeight);
-+                renderer.setViewportNeedsUpdate(true);
-+                GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT);
-+
-+                resolveMaterial.use();
-+                GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
-+                GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, readBuffer.getTextureId());
-+                resolveMaterial.setUniformInt("screenTexture", 0);
-+                renderer.getQuadVertices().bind(resolveMaterial.programId);
-+                GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, renderer.quadVertices.count());
-+                GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, 0);
-+                GLES20.glFinish();
-+
-+                swapBuffers();
-+            }
-+
-+            for (int i = 0; i < effects.size(); i++) {
-+                Effect effect = effects.get(i);
-+                boolean renderToScreen = (i == effects.size() - 1);
-+                int targetFramebuffer = renderToScreen ? 0 : writeBuffer.getFramebuffer();
-+
-+                if (effect == frameGenerationEffect && frameGenerationEffect != null) {
-+                    // FrameGenerationEffect only
-+                    GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, readBuffer.getFramebuffer());
-+                    GLES20.glViewport(0, 0, renderer.surfaceWidth, renderer.surfaceHeight);
-+                    renderer.setViewportNeedsUpdate(true);
-+
-+                    // Do not clear buffer
-+
-+                    frameGenerationEffect.prepareFrame(
-+                            renderer.surfaceWidth,
-+                            renderer.surfaceHeight,
-+                            currentSequence
-+                    );
-+
-+                    GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, targetFramebuffer);
-+                    GLES20.glViewport(0, 0, renderer.surfaceWidth, renderer.surfaceHeight);
-+                    renderer.setViewportNeedsUpdate(true);
-+
-+                    effect.getMaterial().use();
-+
-+                    frameGenerationEffect.setupShaderUniforms();
-+
-+                    renderEffect(effect);
-+
-+                    if (!renderToScreen) {
-+                        swapBuffers();
-+                    }
-+
-+                } else {
-+                    // Other effects
-+                    GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, targetFramebuffer);
-+                    GLES20.glViewport(0, 0, renderer.surfaceWidth, renderer.surfaceHeight);
-+                    renderer.setViewportNeedsUpdate(true);
-+
-+                    GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT);
-+
-+                    renderEffect(effect);
-+
-+                    swapBuffers();
-+                }
-+            }
-+
-+            renderer.xServerView.requestRender();
-+
-+        } finally {
-+            isRendering = false;
-+        }
-+    }
-+
-+    // Renders a single effect
      private void renderEffect(Effect effect) {
 -        ScreenMaterial material = effect.getMaterial();
 +        ShaderMaterial material = effect.getMaterial();
-+        if (material == null) {
-+            return;
-+        }
-+
++        if (material == null) return;
          material.use();
--        renderer.quadVertices.bind(material.programId);
- 
--        material.setUniformVec2(material.uniforms.resolution, renderer.surfaceWidth, renderer.surfaceHeight);
++        // 普通滤镜需要绑定当前纹理；帧生成由 setupShaderUniforms 自行绑定多纹理
 +        if (!(effect instanceof FrameGenerationEffect)) {
-+            material.setUniformVec2("resolution", renderer.surfaceWidth, renderer.surfaceHeight);
++            ScreenMaterial sm = (ScreenMaterial) material;
++            material.setUniformVec2(sm.uniforms.resolution, renderer.surfaceWidth, renderer.surfaceHeight);
 +            GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
 +            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, readBuffer.getTextureId());
-+            material.setUniformInt("screenTexture", 0);
++            material.setUniformInt(sm.uniforms.screenTexture, 0);
 +        }
- 
-+        // Bind the quad vertices to the shader program
-+        renderer.getQuadVertices().bind(material.programId);
- 
+         renderer.quadVertices.bind(material.programId);
+-
+-        material.setUniformVec2(material.uniforms.resolution, renderer.surfaceWidth, renderer.surfaceHeight);
+-
+-
 -        GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
 -        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, readBuffer.getTextureId());
 -        material.setUniformInt(material.uniforms.screenTexture, 0);
-+        // Draw the quad
          GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, renderer.quadVertices.count());
-+
-+        // Unbind the texture
          GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, 0);
      }
- 
--    private void initBuffers() {
--        if (readBuffer == null) {
--            readBuffer = new RenderTarget();
--            readBuffer.allocateFramebuffer(renderer.surfaceWidth, renderer.surfaceHeight);
-+    // Swaps the read and write buffers
-+    private void swapBuffers() {
-+        RenderTarget tmp = writeBuffer;
-+        writeBuffer = readBuffer;
-+        readBuffer = tmp;
-+    }
-+
-+
-+    public synchronized void configureFrameGeneration(int initialFPS, int mode) {
-+        if (frameGenerationEffect != null) {
-+            frameGenerationEffect.setInitialFPS(initialFPS);
-+            frameGenerationEffect.setGenerationMode(mode);
+@@ -64,29 +91,90 @@ public class EffectComposer {
+             readBuffer = new RenderTarget();
+             readBuffer.allocateFramebuffer(renderer.surfaceWidth, renderer.surfaceHeight);
          }
-+        renderer.xServerView.requestRender();
-+    }
- 
--        if (writeBuffer == null) {
--            writeBuffer = new RenderTarget();
--            writeBuffer.allocateFramebuffer(renderer.surfaceWidth, renderer.surfaceHeight);
-+    public void setDisplayRefreshRate(int refreshRate) {
-+        if (frameGenerationEffect != null) {
-+            frameGenerationEffect.setDisplayRefreshRate(refreshRate);
+-
+         if (writeBuffer == null) {
+             writeBuffer = new RenderTarget();
+             writeBuffer.allocateFramebuffer(renderer.surfaceWidth, renderer.surfaceHeight);
          }
      }
  
--    public synchronized void render() {
--        initBuffers();
-+    public void setFrameGenerationVariables(int generationMode, int fpsMultiplier, int apiMode,
-+                                            boolean usePostProcessing, boolean blendModeAuto, float blendScale) {
-+        if (frameGenerationEffect != null) {
-+            if (frameGenerationEffect.isEnabled()) {
-+                Log.d(TAG, "FrameGenerationEffect restart");
-+                int initialFPS;
-+                if (frameGenerationEffect.isAutoDetectFPS())
-+                    initialFPS = 0;
-+                else
-+                    initialFPS = frameGenerationEffect.getInitialFPS();
++    // 决定当前帧应输出：0=原帧，1=插帧
++    private int determineFrameSequence() {
++        if (frameGenerationEffect != null && frameGenerationEffect.isEnabled()) {
++            int frameType = frameGenerationEffect.getFrameToDisplay();
++            if (frameType == 1 && !frameGenerationEffect.isReadyForGeneration()) {
++                return 0;
++            }
++            return frameType;
++        }
++        return 0;
++    }
++
+     public synchronized void render() {
+         initBuffers();
++        int currentSequence = determineFrameSequence();
  
--        GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, hasEffects() ? readBuffer.getFramebuffer() : 0);
--        renderer.drawFrame();
-+                frameGenerationEffect.toggleGeneration();
-+                removeEffect(frameGenerationEffect);
+         GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, hasEffects() ? readBuffer.getFramebuffer() : 0);
+         renderer.drawFrame();
  
 -        for (Effect effect : effects) {
 -            boolean renderToScreen = effect == effects.get(effects.size()-1);
-+                frameGenerationEffect = new FrameGenerationEffect(renderer, generationMode, fpsMultiplier, apiMode,
-+                        usePostProcessing, blendModeAuto, blendScale);
-+                addEffect(frameGenerationEffect);
-+                frameGenerationEffect.toggleGeneration();
-+                frameGenerationEffect.setInitialFPS(initialFPS);
++        for (int i = 0; i < effects.size(); i++) {
++            Effect effect = effects.get(i);
++            boolean renderToScreen = (i == effects.size() - 1);
++            int targetFramebuffer = renderToScreen ? 0 : writeBuffer.getFramebuffer();
++
++            if (effect == frameGenerationEffect && frameGenerationEffect != null) {
++                // 帧生成：先在 readBuffer 上做准备（运动估计/历史帧），再输出到目标
++                GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, readBuffer.getFramebuffer());
++                GLES20.glViewport(0, 0, renderer.surfaceWidth, renderer.surfaceHeight);
++                renderer.setViewportNeedsUpdate(true);
++
++                frameGenerationEffect.prepareFrame(renderer.surfaceWidth, renderer.surfaceHeight, currentSequence);
++
++                GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, targetFramebuffer);
++                GLES20.glViewport(0, 0, renderer.surfaceWidth, renderer.surfaceHeight);
++                renderer.setViewportNeedsUpdate(true);
++
++                effect.getMaterial().use();
++                frameGenerationEffect.setupShaderUniforms();
++                renderEffect(effect);
++                if (!renderToScreen) swapBuffers();
++            } else {
++                GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, targetFramebuffer);
++                GLES20.glViewport(0, 0, renderer.surfaceWidth, renderer.surfaceHeight);
++                renderer.setViewportNeedsUpdate(true);
++                GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT);
++                renderEffect(effect);
++                swapBuffers();
 +            }
 +        }
 +    }
++
++    // ===== 帧生成配置接口（供 FrameGenerationView 调用）=====
  
 -            GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, !renderToScreen ? writeBuffer.getFramebuffer() : 0);
 -            GLES20.glViewport(0, 0, renderer.surfaceWidth, renderer.surfaceHeight);
 -            renderer.viewportNeedsUpdate = true;
 -            GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT);
-+    public synchronized void updateFPS() {
-+        if (lastTime == 0) lastTime = SystemClock.elapsedRealtime();
-+        long time = SystemClock.elapsedRealtime();
-+        if (time >= lastTime + 500) {
-+            lastFPS = (frameCount * 1000L) / (time - lastTime);
-+            lastTime = time;
-+            frameCount = 0;
-+            if (renderer != null && renderer.effectComposer != null && frameGenerationEffect != null) {
-+                if (frameGenerationEffect.isEnabled() && frameGenerationEffect.isAutoDetectFPS() ) {
-+                    frameGenerationEffect.updateFPS((int) lastFPS);
-+                }
-+            }
++    public synchronized void configureFrameGeneration(int initialFPS, int mode) {
++        if (frameGenerationEffect != null) {
++            frameGenerationEffect.setInitialFPS(initialFPS);
++            frameGenerationEffect.setGenerationMode(mode);
 +        }
-+        frameCount++;
++        renderer.xServerView.requestRender();
++    }
++
++    public synchronized void setFrameGenerationVariables(int generationMode, int fpsMultiplier, int apiMode,
++                                                          boolean usePostProcessing, boolean blendModeAuto, float blendScale) {
++        if (frameGenerationEffect != null && frameGenerationEffect.isEnabled()) {
++            int initialFPS = frameGenerationEffect.isAutoDetectFPS() ? 0 : frameGenerationEffect.getInitialFPS();
++            frameGenerationEffect.toggleGeneration();
++            removeEffect(frameGenerationEffect);
++            frameGenerationEffect = new FrameGenerationEffect(renderer, generationMode, fpsMultiplier, apiMode,
++                    usePostProcessing, blendModeAuto, blendScale);
++            addEffect(frameGenerationEffect);
++            frameGenerationEffect.toggleGeneration();
++            frameGenerationEffect.setInitialFPS(initialFPS);
++        }
 +    }
  
 -            renderEffect(effect);
 -            swapBuffers();
-+    public synchronized FrameGenerationSettings getFrameGenerationSettings() {
++    public void setDisplayRefreshRate(int refreshRate) {
 +        if (frameGenerationEffect != null) {
-+            return new FrameGenerationSettings(
-+                    frameGenerationEffect.getInitialFPS(),
-+                    frameGenerationEffect.isAutoDetectFPS(),
-+                    frameGenerationEffect.getCurrentRealFrameInterval(),
-+                    frameGenerationEffect.getCurrentTargetFrameInterval(),
-+                    frameGenerationEffect.getFpsMultiplier()
-+            );
++            frameGenerationEffect.setDisplayRefreshRate(refreshRate);
          }
-+        return null;
-+    }
-+
-+    public void setAntiArtefactsFixNeeded(boolean antiArtefactsFixNeeded) {
-+        this.antiArtefactsFixNeeded = antiArtefactsFixNeeded;
-+        Log.d(TAG, "antiArtefactsFixNeeded = " + antiArtefactsFixNeeded);
      }
-+
-+    public boolean isAntiArtefactsFixNeeded() {
-+        return antiArtefactsFixNeeded;
-+    }
-+
-+    public static class FrameGenerationSettings {
-+        public final int initialFPS;
-+        public final boolean autoDetect;
-+        public final long realInterval;
-+        public final long targetInterval;
-+        public final int fpsMultiplier;
-+
-+        public FrameGenerationSettings(int initialFPS, boolean autoDetect, long realInterval,
-+                                       long targetInterval, int fpsMultiplier) {
-+            this.initialFPS = initialFPS;
-+            this.autoDetect = autoDetect;
-+            this.realInterval = realInterval;
-+            this.targetInterval = targetInterval;
-+            this.fpsMultiplier = fpsMultiplier;
-+        }
-+    }
-+
-+    private static class ResolveMaterial extends ScreenMaterial {
-+        @Override
-+        protected String getFragmentShader() {
-+            return String.join("\n", new CharSequence[]{
-+                    "precision highp float;",
-+                    "uniform sampler2D screenTexture;",
-+                    "in vec2 vUV;",
-+                    "layout(location = 0) out vec4 outFragColor;",
-+                    "void main() {",
-+                    "    outFragColor = texture(screenTexture, vUV);",
-+                    "}"
-+            });
-+        }
-+    }
-+
- }
+-}
 \ No newline at end of file
++}
 diff --git a/app/src/main/java/com/winlator/renderer/GLRenderer.java b/app/src/main/java/com/winlator/renderer/GLRenderer.java
-index c55071ec..02298c1c 100644
+index c55071e..912312e 100644
 --- a/app/src/main/java/com/winlator/renderer/GLRenderer.java
 +++ b/app/src/main/java/com/winlator/renderer/GLRenderer.java
-@@ -120,6 +120,7 @@ public class GLRenderer implements GLSurfaceView.Renderer, WindowManager.OnWindo
-             effectComposer.render();
-         }
-         else drawFrame();
-+        effectComposer.updateFPS();
-     }
- 
-     protected void drawFrame() {
-@@ -505,4 +506,16 @@ public class GLRenderer implements GLSurfaceView.Renderer, WindowManager.OnWindo
-         });
-         xServerView.requestRender();
-     }
-+
+@@ -42,7 +42,14 @@ import javax.microedition.khronos.opengles.GL10;
+ public class GLRenderer implements GLSurfaceView.Renderer, WindowManager.OnWindowModificationListener, Pointer.OnPointerMotionListener {
+     public final XServerView xServerView;
+     private final XServer xServer;
+-    protected final VertexAttribute quadVertices = new VertexAttribute("position", 2);
++    public final VertexAttribute quadVertices = new VertexAttribute("position", 2);
++    // 帧生成桥接：供 renderer.effects 包访问（FrameGenerationEffect 依赖）
 +    public VertexAttribute getQuadVertices() {
 +        return quadVertices;
 +    }
-+
 +    public void setViewportNeedsUpdate(boolean needsUpdate) {
 +        this.viewportNeedsUpdate = needsUpdate;
 +    }
-+
-+    public EffectComposer getEffectComposer() {
-+        return effectComposer;
-+    }
- }
+     private final float[] tmpXForm1 = XForm.getInstance();
+     private final float[] tmpXForm2 = XForm.getInstance();
+     private final CursorMaterial cursorMaterial = new CursorMaterial();
+diff --git a/app/src/main/java/com/winlator/renderer/effects/Effect.java b/app/src/main/java/com/winlator/renderer/effects/Effect.java
+index 1a914f3..fc51f0a 100644
+--- a/app/src/main/java/com/winlator/renderer/effects/Effect.java
++++ b/app/src/main/java/com/winlator/renderer/effects/Effect.java
+@@ -1,15 +1,15 @@
+ package com.winlator.renderer.effects;
+ 
+-import com.winlator.renderer.material.ScreenMaterial;
++import com.winlator.renderer.material.ShaderMaterial;
+ 
+ public abstract class Effect {
+-    private ScreenMaterial material;
++    private ShaderMaterial material;
+ 
+-    protected ScreenMaterial createMaterial() {
++    protected ShaderMaterial createMaterial() {
+         return null;
+     }
+ 
+-    public ScreenMaterial getMaterial() {
++    public ShaderMaterial getMaterial() {
+         if (material == null) material = createMaterial();
+         return material;
+     }
 diff --git a/app/src/main/java/com/winlator/renderer/effects/FrameGenerationEffect.java b/app/src/main/java/com/winlator/renderer/effects/FrameGenerationEffect.java
 new file mode 100644
-index 00000000..545e95ee
+index 0000000..b9a27bb
 --- /dev/null
 +++ b/app/src/main/java/com/winlator/renderer/effects/FrameGenerationEffect.java
-@@ -0,0 +1,1349 @@
-+/*
-+ * Ported from alexvorxx/winlator (MIT License)
-+ * Copyright (c) 2023 BrunoSX
-+ * MIT License: https://github.com/alexvorxx/winlator/blob/main/LICENSE
-+ */
-+
+@@ -0,0 +1,1343 @@
 +package com.winlator.renderer.effects;
 +
 +import android.opengl.GLES20;
@@ -818,7 +586,7 @@ index 00000000..545e95ee
 +    }
 +
 +    @Override
-+    protected ScreenMaterial createMaterial() {
++    protected ShaderMaterial createMaterial() {
 +        switch (generationMode) {
 +            case GENERATION_MODE_FAST:
 +                Log.d(TAG, "Fast generation mode selected");
@@ -1204,9 +972,9 @@ index 00000000..545e95ee
 +
 +    public void setupShaderUniforms() {
 +        ShaderMaterial material = getMaterial();
-+        if (material == null || material.getProgram() == 0) return;
++        if (material == null || material.programId == 0) return;
 +
-+        int program = material.getProgram();
++        int program = material.programId;
 +
 +        // Initialize uniform locations
 +        if (uIsEnabledLoc == -1) {
@@ -1578,9 +1346,9 @@ index 00000000..545e95ee
 +
 +        GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
 +        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, srcTexture);
-+        GLES20.glUniform1i(lumaMaterial.getUniformLocation("screenTexture"), 0);
++        GLES20.glUniform1i(lumaMaterial.uniforms.screenTexture.location, 0);
 +
-+        GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, renderer.getQuadVertices().count());
++        GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, renderer.quadVertices.count());
 +        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, 0);
 +
 +        GLES20.glEnable(GLES20.GL_BLEND);
@@ -1950,55 +1718,12 @@ index 00000000..545e95ee
 +    }
 +}
 \ No newline at end of file
-diff --git a/app/src/main/java/com/winlator/renderer/material/ShaderMaterial.java b/app/src/main/java/com/winlator/renderer/material/ShaderMaterial.java
-index aecbd1ec..0fd66011 100644
---- a/app/src/main/java/com/winlator/renderer/material/ShaderMaterial.java
-+++ b/app/src/main/java/com/winlator/renderer/material/ShaderMaterial.java
-@@ -69,6 +69,16 @@ public abstract class ShaderMaterial {
-         GLES20.glUseProgram(programId);
-     }
- 
-+    // 兼容帧生成移植：返回当前着色器程序 ID（alexvorxx API）
-+    public int getProgram() {
-+        return programId;
-+    }
-+
-+    // 兼容帧生成移植：按字符串名获取 uniform location（与 private 的 Uniform 重载共存）
-+    public int getUniformLocation(String name) {
-+        return programId != 0 ? GLES20.glGetUniformLocation(programId, name) : -1;
-+    }
-+
-     private int getUniformLocation(Uniform uniform) {
-         if (uniform.location != -1) return uniform.location;
-         int location = programId != 0 ? GLES20.glGetUniformLocation(programId, uniform.name) : -1;
-@@ -109,4 +119,15 @@ public abstract class ShaderMaterial {
-         int location = getUniformLocation(uniform);
-         if (location != -1) GLES20.glUniform2f(location, x, y);
-     }
-+
-+    // ===== 帧生成移植：字符串名重载（alexvorxx 用字符串名设置 uniform）=====
-+    public void setUniformInt(String name, int value) {
-+        int location = getUniformLocation(name);
-+        if (location != -1) GLES20.glUniform1i(location, value);
-+    }
-+
-+    public void setUniformVec2(String name, float x, float y) {
-+        int location = getUniformLocation(name);
-+        if (location != -1) GLES20.glUniform2f(location, x, y);
-+    }
- }
 diff --git a/app/src/main/java/com/winlator/widget/FrameGenerationView.java b/app/src/main/java/com/winlator/widget/FrameGenerationView.java
 new file mode 100644
-index 00000000..1f131ff1
+index 0000000..eca5d4f
 --- /dev/null
 +++ b/app/src/main/java/com/winlator/widget/FrameGenerationView.java
-@@ -0,0 +1,518 @@
-+/*
-+ * Ported from alexvorxx/winlator (MIT License)
-+ * Copyright (c) 2023 BrunoSX
-+ * MIT License: https://github.com/alexvorxx/winlator/blob/main/LICENSE
-+ */
-+
+@@ -0,0 +1,512 @@
 +package com.winlator.widget;
 +
 +import android.content.Context;
@@ -2050,7 +1775,7 @@ index 00000000..1f131ff1
 +    private final ToggleButton toggleButtonPP;
 +
 +    private static final String[] GENERATION_MODE_OPTIONS = {
-+            "Fast", "Balanced", "Quality"
++            "快速", "均衡", "质量"
 +    };
 +
 +    private static final int[] GENERATION_MODE_VALUES = {
@@ -2060,7 +1785,7 @@ index 00000000..1f131ff1
 +    };
 +
 +    private static final String[] FPS_MULTIPLIER_OPTIONS = {
-+            "x2", "x3", "x4"
++            "2倍", "3倍", "4倍"
 +    };
 +
 +    private static final int[] FPS_MULTIPLIER_VALUES = {
@@ -2070,7 +1795,7 @@ index 00000000..1f131ff1
 +    };
 +
 +    private static final String[] INITIAL_FPS_OPTIONS = {
-+            "Auto", "15", "20", "25", "30", "45", "60"
++            "自动", "15", "20", "25", "30", "45", "60"
 +    };
 +
 +    private static final int[] INITIAL_FPS_VALUES = {
@@ -2084,7 +1809,7 @@ index 00000000..1f131ff1
 +    };
 +
 +    private static final String[] BLEND_MODE_OPTIONS = {
-+            "Auto", "Fixed"
++            "自动", "固定"
 +    };
 +
 +    private static final int[] API_MODE_VALUES = {
@@ -2093,7 +1818,7 @@ index 00000000..1f131ff1
 +    };
 +
 +    private static final String[] API_MODE_OPTIONS = {
-+            "GLES 2.0", "Qualcomm"
++            "通用 GLES 2.0", "高通硬件"
 +    };
 +
 +    private int initialFPS;
@@ -2512,73 +2237,9 @@ index 00000000..1f131ff1
 +    }
 +}
 \ No newline at end of file
-diff --git a/app/src/main/java/com/winlator/widget/FrameRating.java b/app/src/main/java/com/winlator/widget/FrameRating.java
-index 6597d3e5..aa8b4563 100644
---- a/app/src/main/java/com/winlator/widget/FrameRating.java
-+++ b/app/src/main/java/com/winlator/widget/FrameRating.java
-@@ -14,6 +14,8 @@ import com.winlator.R;
- import com.winlator.box64.Box64Utils;
- import com.winlator.core.CPUStatus;
- import com.winlator.core.StringUtils;
-+import com.winlator.renderer.EffectComposer;
-+import com.winlator.renderer.GLRenderer;
- 
- import java.util.Locale;
- 
-@@ -32,6 +34,11 @@ public class FrameRating extends FrameLayout implements Runnable {
-     private String cpuInfo = null;
-     private byte tick = 0;
- 
-+    // 帧生成倍率显示（由 XServerDisplayActivity 注入 renderer；为 null 时不影响原有 HUD）
-+    private GLRenderer renderer;
-+    private int fpsMultiplier = 2;
-+    private boolean frameGenerationEnabled = false;
-+
-     public FrameRating(Context context) {
-         this(context, null);
-     }
-@@ -94,6 +101,25 @@ public class FrameRating extends FrameLayout implements Runnable {
-         setupPanels();
-     }
- 
-+    // 注入渲染器用于读取帧生成状态（不改变原有构造函数签名）
-+    public void setRenderer(GLRenderer renderer) {
-+        this.renderer = renderer;
-+    }
-+
-+    // 读取帧生成倍率；帧生成未启用时返回 false，HUD 回退显示原始 FPS
-+    private void updateFPSMultiplier() {
-+        if (renderer != null && renderer.effectComposer != null) {
-+            EffectComposer.FrameGenerationSettings settings =
-+                    renderer.effectComposer.getFrameGenerationSettings();
-+            if (settings != null) {
-+                frameGenerationEnabled = true;
-+                fpsMultiplier = settings.fpsMultiplier;
-+                return;
-+            }
-+        }
-+        frameGenerationEnabled = false;
-+    }
-+
-     public void setGPUInfo(String gpuInfo) {
-         post(() -> ((TextView)gpuPanel.getChildAt(1)).setText(gpuInfo));
-     }
-@@ -120,7 +146,11 @@ public class FrameRating extends FrameLayout implements Runnable {
-     @Override
-     public void run() {
-         if (getVisibility() == GONE) setVisibility(View.VISIBLE);
--        ((TextView)fpsPanel.getChildAt(1)).setText(String.format(Locale.ENGLISH, "%.1f", lastFPS));
-+        updateFPSMultiplier();
-+        String fpsText = frameGenerationEnabled
-+                ? String.format(Locale.ENGLISH, "%.1f → %.0f", lastFPS, lastFPS * fpsMultiplier)
-+                : String.format(Locale.ENGLISH, "%.1f", lastFPS);
-+        ((TextView)fpsPanel.getChildAt(1)).setText(fpsText);
- 
-         if (mode == Mode.FULL && ++tick >= 2) {
-             tick = 0;
 diff --git a/app/src/main/res/layout/frame_generation_layout.xml b/app/src/main/res/layout/frame_generation_layout.xml
 new file mode 100644
-index 00000000..3ac73af0
+index 0000000..0cb5348
 --- /dev/null
 +++ b/app/src/main/res/layout/frame_generation_layout.xml
 @@ -0,0 +1,249 @@
@@ -2586,7 +2247,7 @@ index 00000000..3ac73af0
 +<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
 +    android:layout_width="wrap_content"
 +    android:layout_height="wrap_content"
-+    android:background="@drawable/content_dialog_background_dark"
++    android:background="@drawable/content_dialog_background_light"
 +    android:gravity="center"
 +    android:orientation="vertical"
 +    android:paddingTop="16dp"
@@ -2832,45 +2493,38 @@ index 00000000..3ac73af0
 +
 +</LinearLayout>
 \ No newline at end of file
-diff --git a/app/src/main/res/layout/screen_effect_dialog.xml b/app/src/main/res/layout/screen_effect_dialog.xml
-index 6ffec6de..05669db5 100644
---- a/app/src/main/res/layout/screen_effect_dialog.xml
-+++ b/app/src/main/res/layout/screen_effect_dialog.xml
-@@ -121,6 +121,13 @@
-                 android:layout_width="wrap_content"
-                 android:layout_height="wrap_content"
-                 android:text="@string/enable_crt_shader" />
-+
-+            <Button
-+                android:id="@+id/BTFrameGeneration"
-+                android:layout_width="match_parent"
-+                android:layout_height="wrap_content"
-+                android:layout_marginTop="8dp"
-+                android:text="@string/frame_generation" />
-         </LinearLayout>
-     </LinearLayout>
- </LinearLayout>
-\ No newline at end of file
+diff --git a/app/src/main/res/menu/xserver_menu.xml b/app/src/main/res/menu/xserver_menu.xml
+index a471d4a..3de6df0 100644
+--- a/app/src/main/res/menu/xserver_menu.xml
++++ b/app/src/main/res/menu/xserver_menu.xml
+@@ -10,6 +10,7 @@
+         <item android:icon="@drawable/icon_active_windows" android:id="@+id/menu_item_active_windows" android:title="@string/active_windows" />
+         <item android:icon="@drawable/icon_magnifier" android:id="@+id/menu_item_magnifier" android:title="@string/magnifier" />
+         <item android:icon="@drawable/icon_screen_effect" android:id="@+id/menu_item_screen_effect" android:title="@string/screen_effect" />
++        <item android:icon="@drawable/icon_settings" android:id="@+id/menu_item_frame_generation" android:title="@string/frame_generation" />
+         <item android:icon="@drawable/icon_pip_mode" android:id="@+id/menu_item_pip_mode" android:title="@string/pip_mode" />
+         <item android:icon="@drawable/icon_debug" android:id="@+id/menu_item_logs" android:title="@string/logs" />
+         <item android:icon="@drawable/icon_debug" android:id="@+id/menu_item_fix_perms" android:title="@string/fix_perms" />
 diff --git a/app/src/main/res/values/strings.xml b/app/src/main/res/values/strings.xml
-index 43ab9902..b532b088 100644
+index 43ab990..3a6cb23 100644
 --- a/app/src/main/res/values/strings.xml
 +++ b/app/src/main/res/values/strings.xml
-@@ -568,4 +568,17 @@
-     <string name="fgs_notification_content_else">Winlator is running in the background</string>
-     <string name="save_mem_on_run_from_steam">Save memory on run from Steam</string>
-     <string name="present_mode">Present Mode</string>
-+    <string name="frame_generation" translatable="false">Frame generation</string>
-+    <string name="generation_mode" translatable="false">Mode:</string>
-+    <string name="fps_multiplier" translatable="false">Multiplier:</string>
-+    <string name="blend" translatable="false">Blending:</string>
-+    <string name="on" translatable="false">ON</string>
-+    <string name="off" translatable="false">OFF</string>
-+    <string name="initial_fps" translatable="false">Init. FPS:</string>
-+    <string name="api" translatable="false">API:</string>
-+    <string name="post_processing" translatable="false">Post-processing:</string>
-+    <string name="motion_scale" translatable="false">Motion force:</string>
-+    <string name="fps_text" translatable="false">FPS:</string>
-+    <string name="ram_text" translatable="false">RAM:</string>
-+    <string name="battery_temperature_text" translatable="false">BAT:</string>
- </resources>
-\ No newline at end of file
+@@ -343,7 +343,17 @@
+     <string name="audio">Audio</string>
+     <string name="opengl_version">OpenGL Version</string>
+     <string name="disable_vertex_array_bgra">Disable vertex array BGRA</string>
+-    <string name="screen_effect">Screen Effect</string>
++    <string name="screen_effect">屏幕滤镜</string>
++    <string name="frame_generation">帧生成</string>
++    <string name="generation_mode">生成模式：</string>
++    <string name="fps_multiplier">帧率倍率：</string>
++    <string name="initial_fps">初始帧率：</string>
++    <string name="post_processing">后处理：</string>
++    <string name="motion_scale">运动强度：</string>
++    <string name="api">API 模式：</string>
++    <string name="blend">混合模式：</string>
++    <string name="on">开</string>
++    <string name="off">关</string>
+     <string name="enable_fxaa">Enable FXAA</string>
+     <string name="brightness">Brightness</string>
+     <string name="contrast">Contrast</string>
