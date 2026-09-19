@@ -136,10 +136,10 @@ index f262514..b385f65 100644
                  PictureInPictureParams pipParams = (new PictureInPictureParams.Builder())
                      .setAspectRatio(screenInfo.aspectRatio())
 diff --git a/app/src/main/java/com/winlator/renderer/EffectComposer.java b/app/src/main/java/com/winlator/renderer/EffectComposer.java
-index 79ea768..15e9696 100644
+index 79ea768..bbafe58 100644
 --- a/app/src/main/java/com/winlator/renderer/EffectComposer.java
 +++ b/app/src/main/java/com/winlator/renderer/EffectComposer.java
-@@ -1,29 +1,51 @@
+@@ -1,29 +1,54 @@
  package com.winlator.renderer;
  
  import android.opengl.GLES20;
@@ -159,6 +159,9 @@ index 79ea768..15e9696 100644
 + */
  public class EffectComposer {
 +    private static final String TAG = "EffectComposer";
++
++    /** 帧生成调试日志总开关（FrameGenerationEffect.LogString 会读它） */
++    public static final boolean logEnabled = false;
 +
      private final GLRenderer renderer;
      private RenderTarget readBuffer = null;
@@ -192,7 +195,7 @@ index 79ea768..15e9696 100644
          renderer.xServerView.requestRender();
      }
  
-@@ -45,16 +67,18 @@ public class EffectComposer {
+@@ -45,16 +70,18 @@ public class EffectComposer {
      }
  
      private void renderEffect(Effect effect) {
@@ -219,7 +222,7 @@ index 79ea768..15e9696 100644
          GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, renderer.quadVertices.count());
          GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, 0);
      }
-@@ -64,29 +88,90 @@ public class EffectComposer {
+@@ -64,29 +91,90 @@ public class EffectComposer {
              readBuffer = new RenderTarget();
              readBuffer.allocateFramebuffer(renderer.surfaceWidth, renderer.surfaceHeight);
          }
@@ -284,7 +287,11 @@ index 79ea768..15e9696 100644
 +    }
 +
 +    // ===== 帧生成配置接口（供 FrameGenerationView 调用）=====
-+
+ 
+-            GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, !renderToScreen ? writeBuffer.getFramebuffer() : 0);
+-            GLES20.glViewport(0, 0, renderer.surfaceWidth, renderer.surfaceHeight);
+-            renderer.viewportNeedsUpdate = true;
+-            GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT);
 +    public synchronized void configureFrameGeneration(int initialFPS, int mode) {
 +        if (frameGenerationEffect != null) {
 +            frameGenerationEffect.setInitialFPS(initialFPS);
@@ -292,11 +299,7 @@ index 79ea768..15e9696 100644
 +        }
 +        renderer.xServerView.requestRender();
 +    }
- 
--            GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, !renderToScreen ? writeBuffer.getFramebuffer() : 0);
--            GLES20.glViewport(0, 0, renderer.surfaceWidth, renderer.surfaceHeight);
--            renderer.viewportNeedsUpdate = true;
--            GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT);
++
 +    public synchronized void setFrameGenerationVariables(int generationMode, int fpsMultiplier, int apiMode,
 +                                                          boolean usePostProcessing, boolean blendModeAuto, float blendScale) {
 +        if (frameGenerationEffect != null && frameGenerationEffect.isEnabled()) {
